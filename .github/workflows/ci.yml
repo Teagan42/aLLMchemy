@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # Both runners are load-bearing: macOS ships bash 3.2 and no `timeout`, Ubuntu ships
+    # bash 5.x. The portability floor in DEVELOPING.md is only enforced if both run.
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      # fetch-depth: 0 is required, not tidiness. template/secret-scan.sh refuses a shallow
+      # clone because a truncated history hides a committed key, and dev/test.sh's `secrets`
+      # suite turns that refusal into a hard failure. actions/checkout defaults to depth 1,
+      # so without this every run is red for a reason that looks like a scanner bug.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+        # No package.json and no lockfile, deliberately. A cache: or npm ci step would fail.
+
+      # Names the bash a failure was produced by, so a 3.2-only break is obvious in the log.
+      - name: Record shell version
+        run: bash --version | head -1
+
+      # The tool preflight. jq is a hard dependency of the detector suite via
+      # .claude/hooks/no-questions.sh and is only on the runners by accident of the image;
+      # setup names any missing required tool instead of failing later inside a hook.
+      - run: make setup
+
+      - run: make check
