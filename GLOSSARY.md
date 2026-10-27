@@ -134,8 +134,21 @@ Registering for an external service during a run, producing an acquired credenti
 **Recovery root**:
 The acquired account every other acquired account can be recovered through, typically an email account. First in a handoff and last to be torn down, because revoking it orphans everything beneath it.
 
+**Support**:
+What a provider's adapter declares the provider can do. A property of code, true before any credential exists. It orders preference and names what a missing credential would unlock; it never prunes work or sets an outcome.
+_Avoid_: declared capability
+
 **Capability**:
-Something a run has been shown it can actually do, established by probing rather than declared. Absent capabilities remove work from a run rather than being noted as caveats.
+Something a run has been shown it can actually do, established by probing rather than declared. Absent capabilities remove work from a run rather than being noted as caveats. Distinct from [[support]], which is what was merely possible.
+
+**Requirement**:
+What a step needs in order to run. Several capabilities may satisfy one, at differing fidelity.
+
+**Satisfaction tier**:
+Which fallback level met a requirement. Recorded, because "it works, by the third-best means" is a different fact from "it works" and the handoff owes the operator the difference.
+
+**Structural skip**:
+A gate left unrun because pruning removed the work it would have judged. Recorded when the work is pruned, not discovered by the gate — a gate that reasons about its own absent subject is where a skip becomes a pass.
 
 **Privileged operation**:
 An act that reaches outside a run's workspace — creating, changing or destroying something external, or spending. Only the foundry performs one; a harness can ask for one but never does it.
