@@ -1,0 +1,111 @@
+name: release-assets
+
+# Packages the handoff bundle and attaches it to a published release.
+#
+# The gate runs again here, against the exact tag. release-please's PR is opened by
+# GITHUB_TOKEN and therefore never triggered `ci`, so without this a release could ship
+# from a tree no workflow ever tested.
+
+on:
+  release:
+    types: [published]
+  # Lets the packaging be exercised without cutting a release.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Ref to package
+        required: false
+        default: main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-assets-${{ github.event.release.tag_name || inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    # Same both-runner matrix as ci: the portability floor is only enforced if macOS runs,
+    # and a release is the worst place to discover a bash 3.2 break.
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.ref }}
+          # template/secret-scan.sh refuses a shallow clone, and a release is exactly when
+          # a committed key must not slip through.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: make setup
+      - run: make check
+
+  package:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.ref }}
+          fetch-depth: 0
+
+      - name: Build the handoff bundle
+        id: bundle
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.release.tag_name || inputs.ref }}"
+          VERSION="${VERSION#v}"
+          NAME="aLLMchemy-${VERSION}"
+          mkdir -p "dist/${NAME}"
+          # Ship the tree minus VCS and CI plumbing. Deliberately NOT minus dev/ or the
+          # Makefile: README.md, AGENTS.md and DEVELOPING.md all reference those paths, and
+          # a bundle whose own documentation points at missing files is worse than a
+          # slightly larger one.
+          tar -cf - \
+            --exclude='./.git' \
+            --exclude='./.github' \
+            --exclude='./artifacts' \
+            --exclude='./dist' \
+            . | tar -xf - -C "dist/${NAME}"
+          tar -czf "dist/${NAME}.tar.gz" -C dist "${NAME}"
+          ( cd dist && shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256" )
+          printf 'name=%s\n' "$NAME" >> "$GITHUB_OUTPUT"
+          ls -lh dist
+          cat "dist/${NAME}.tar.gz.sha256"
+
+      # Unpack what will actually be downloaded and run its gate there. Packaging bugs —
+      # an exclude that took too much, a lost exec bit — only show up on the extracted copy.
+      - name: Verify the bundle runs from an extracted copy
+        run: |
+          set -euo pipefail
+          NAME='${{ steps.bundle.outputs.name }}'
+          mkdir -p /tmp/unpacked && tar -xzf "dist/${NAME}.tar.gz" -C /tmp/unpacked
+          cd "/tmp/unpacked/${NAME}"
+          test -x bin/detect-question.sh || { echo 'exec bits lost in the tarball'; exit 1; }
+          # secrets and failover are skipped: the bundle has no .git, and the failover suite
+          # is slow. Both already ran in `verify` against the real checkout.
+          ./dev/test.sh --suite syntax --suite patterns --suite detector \
+                        --suite billing --suite intake --suite chain --suite gates
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NAME='${{ steps.bundle.outputs.name }}'
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "dist/${NAME}.tar.gz" "dist/${NAME}.tar.gz.sha256" --clobber
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.bundle.outputs.name }}
+          path: dist/*
+          if-no-files-found: error

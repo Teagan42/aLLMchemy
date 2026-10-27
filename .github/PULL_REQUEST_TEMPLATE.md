@@ -20,3 +20,9 @@ describe one contract three times and move in one commit. Confirm all three move
 `node bin/validate-intake.mjs --check-docs` exits 0 — the plain
 `node bin/validate-intake.mjs intake.example.yaml` run exits 0 even on a drifted tree and
 cannot stand in for it.
+
+**Conventional title.** This PR's title becomes the commit subject on a squash merge, so it
+is what `release-please` reads to pick the next version. `feat:` and `fix:` move the version;
+`docs:`, `ci:`, `chore:` and the rest land in the changelog only. A wrong type does not fail
+loudly — it ships with no release. `dev/check-commits.sh --title "<your title>"` checks it
+before CI does.

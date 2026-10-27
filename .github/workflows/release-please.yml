@@ -1,0 +1,37 @@
+name: release-please
+
+# Maintains a release PR from the conventional-commit history, then tags and creates the
+# GitHub release when that PR merges. The version comes from commit types, not from anyone
+# remembering to bump a number.
+#
+# bump-minor-pre-major is on while the version is 0.x, so `feat` moves the minor and only an
+# explicit `!` or BREAKING CHANGE reaches 1.0.0.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Two settings outside this file have to be right, and both fail confusingly:
+      #   Settings -> Actions -> General -> "Allow GitHub Actions to create and approve
+      #   pull requests" must be ON, or this 403s on the release PR.
+      # Also: a PR opened by GITHUB_TOKEN does not trigger other workflows, so `ci` does not
+      # run on the release PR itself. The commits it contains were already checked on their
+      # own PRs; re-verification happens in `release-assets` before anything is published.
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

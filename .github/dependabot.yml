@@ -1,0 +1,15 @@
+version: 2
+
+# Only one ecosystem to watch. The repo has no package.json, lockfile or requirements file
+# on purpose, so action versions are the sole dependency surface — and a stale pinned action
+# is the one that breaks CI without anyone touching the code.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      # Must satisfy dev/check-commits.sh, or every Dependabot PR fails the commits gate.
+      prefix: chore
+      include: scope
+    open-pull-requests-limit: 5

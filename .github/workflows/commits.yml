@@ -1,0 +1,42 @@
+name: commits
+
+# Conventional Commits is not style policing here: release-please derives the next version
+# from these messages, so a wrong type does not fail loudly — it ships the change with no
+# release at all. This catches that before merge.
+
+on:
+  pull_request:
+    # `edited` matters: a PR title is editable after opening, and a squash merge takes the
+    # title as the commit subject. Without it a fixed title never re-runs the check.
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commits-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  conventional:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Full history: the range check needs the merge base, which a shallow clone lacks.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The branch's own commits. Squash-merging discards these subjects, but merge and
+      # rebase strategies keep them, so they are checked too.
+      - name: Validate commits in the PR
+        run: |
+          git fetch --quiet origin "${{ github.base_ref }}"
+          ./dev/check-commits.sh --range "origin/${{ github.base_ref }}..HEAD"
+
+      # The title is the subject a squash merge actually lands, so it is the one that
+      # decides the release. Checked even when every branch commit is already valid.
+      - name: Validate the PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: ./dev/check-commits.sh --title "$PR_TITLE"

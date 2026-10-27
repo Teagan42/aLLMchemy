@@ -1,0 +1,97 @@
+name: docker
+
+# Conditional by design. This repo has NO Dockerfile today: it is a handoff package of
+# markdown, shell and a dependency-free JS billing core, with nothing to containerise. The
+# Dockerfile belongs to the *generated product* (playbook/deploy-pipeline.md's local-container
+# fallback tier), not to the factory.
+#
+# So this workflow detects one and no-ops cleanly when absent, rather than failing red on
+# every push for a file that was never meant to exist. Add a Dockerfile and it starts
+# building with no edit here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      found: ${{ steps.look.outputs.found }}
+      file: ${{ steps.look.outputs.file }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: look
+        name: Look for a Dockerfile
+        run: |
+          set -euo pipefail
+          # First match wins, repo root preferred. -print -quit keeps this cheap.
+          FILE=$(find . -maxdepth 2 -name Dockerfile -not -path './.git/*' -print -quit)
+          if [ -n "$FILE" ]; then
+            printf 'found=true\nfile=%s\n' "${FILE#./}" >> "$GITHUB_OUTPUT"
+            printf 'Dockerfile: %s\n' "${FILE#./}"
+          else
+            printf 'found=false\nfile=\n' >> "$GITHUB_OUTPUT"
+            printf 'No Dockerfile. Nothing to build — this is expected for the factory\n'
+            printf 'package itself; the container belongs to the generated product.\n'
+          fi
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.found == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # Tags and labels from git state, so a tag, a branch and a PR each get a sane name
+      # without string-building here.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,format=short
+
+      # Only authenticate when something will actually be pushed. A PR from a fork has no
+      # package-write token, and logging in would fail before the build that still has value.
+      - if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ needs.detect.outputs.file }}
+          # Build on a PR to prove it still builds; push only from main and releases, so a
+          # fork PR can never publish to the registry.
+          push: ${{ github.event_name != 'pull_request' }}
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
