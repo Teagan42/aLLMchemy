@@ -52,13 +52,34 @@ LOCAL_MODEL="${FACTORY_LOCAL_MODEL:-gpt-oss:20b}"
 # Empty means "whatever gateway/env.sh or the ambient environment already selects". A
 # hardcoded cloud model id here would rot and silently pin the run to an old model.
 CLOUD_MODEL="${FACTORY_CLOUD_MODEL:-}"
-TIERS="${FACTORY_TIERS:-cloud local-claude local-opencode}"
+# local-opencode is deliberately absent: OpenCode wedges often enough that handing an
+# unattended run to it trades one hang for another. Add it with FACTORY_TIERS to opt in.
+TIERS="${FACTORY_TIERS:-cloud local-claude}"
+
+# The intake's documented chain must actually steer the run; a field nothing reads is a lie,
+# which is what `model_fallback` was before this. Explicit env wins, then intake, then default.
+if [ -z "${FACTORY_MODEL_CHAIN:-}" ] && command -v node >/dev/null 2>&1; then
+  FACTORY_MODEL_CHAIN=$(node bin/validate-intake.mjs --json 2>/dev/null \
+    | sed -E -n 's/.*"model_chain"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | head -1)
+fi
+FACTORY_MODEL_CHAIN="${FACTORY_MODEL_CHAIN:-cloud ollama}"
+export FACTORY_MODEL_CHAIN
+
+# A wedged harness writes nothing and never returns, so the run waits forever — the same
+# permanent hang a question causes. Inactivity is the signal, not wall clock: local
+# inference is slow but noisy, while a wedged process is fast and silent.
+FACTORY_STALL_SECS="${FACTORY_STALL_SECS:-900}"
+FACTORY_POLL_SECS="${FACTORY_POLL_SECS:-15}"
+case "$FACTORY_STALL_SECS" in ''|*[!0-9]*) FACTORY_STALL_SECS=900 ;; esac
+case "$FACTORY_POLL_SECS" in ''|*[!0-9]*) FACTORY_POLL_SECS=15 ;; esac
+[ "$FACTORY_POLL_SECS" -lt 1 ] && FACTORY_POLL_SECS=1
 
 RC=0
 CAUSE=
 RUNG=0
 TOTAL_ATTEMPTS=0
 GATEWAY_STARTED=0
+STALLED=0
 
 : > "$OUT"
 say()  { printf '== %s ==\n' "$*"; printf '== %s ==\n' "$*" >> "$OUT"; }
@@ -227,20 +248,85 @@ harness_env() {  # model
   return 0
 }
 
+# Waits on the harness, killing it once it stops writing. Returns 124 on a stall so
+# classify() can name the cause instead of guessing from a signal-shaped exit code.
+supervise() {  # pid
+  s_pid=$1
+  s_prev=-1
+  s_idle=0
+  STALLED=0
+  while kill -0 "$s_pid" 2>/dev/null; do
+    # Sleep in one-second steps rather than one long poll: a single `sleep $POLL` adds the
+    # whole interval to every attempt, since a finished harness is not noticed until it ends.
+    s_slept=0
+    while [ "$s_slept" -lt "$FACTORY_POLL_SECS" ] && kill -0 "$s_pid" 2>/dev/null; do
+      sleep 1
+      s_slept=$(( s_slept + 1 ))
+    done
+    kill -0 "$s_pid" 2>/dev/null || break
+    s_now=$(( $(wc -c < "$RAW" 2>/dev/null || echo 0) + $(wc -c < "$ERRF" 2>/dev/null || echo 0) ))
+    if [ "$s_now" -ne "$s_prev" ]; then
+      s_prev=$s_now
+      s_idle=0
+      continue
+    fi
+    s_idle=$(( s_idle + FACTORY_POLL_SECS ))
+    [ "$s_idle" -lt "$FACTORY_STALL_SECS" ] && continue
+    STALLED=1
+    warn "harness silent for ${s_idle}s; killing it and failing this tier over"
+    # Negative pid signals the whole group: the harness spawns children, and killing only
+    # the shell that exec'd it would orphan them still holding the model and the port.
+    kill -TERM -"$s_pid" 2>/dev/null || kill -TERM "$s_pid" 2>/dev/null
+    s_grace=0
+    while [ "$s_grace" -lt 5 ] && kill -0 "$s_pid" 2>/dev/null; do
+      sleep 1
+      s_grace=$(( s_grace + 1 ))
+    done
+    kill -KILL -"$s_pid" 2>/dev/null || kill -KILL "$s_pid" 2>/dev/null
+    wait "$s_pid" 2>/dev/null
+    return 124
+  done
+  wait "$s_pid"
+  return $?
+}
+
+# Monitor mode puts the child in its own process group, which is what makes the watchdog's
+# group kill reach the whole tree rather than just the spawning shell.
+spawn_watched() {  # command...
+  set -m
+  ( "$@" ) > "$RAW" 2> "$ERRF" &
+  w_pid=$!
+  set +m
+  supervise "$w_pid"
+}
+
+_exec_claude() {  # model, claude args...
+  harness_env "$1"
+  shift
+  exec "$CLAUDE_BIN" $CLAUDE_FLAGS "$@"
+}
+
 # Captures ONLY the final assistant message. Feeding the whole event stream to the detector
 # trips it on question-shaped lines inside tool output and file contents.
+#
+# stream-json, not json: a buffered format writes nothing until the turn ends, leaving the
+# watchdog unable to tell a working harness from a wedged one.
 run_claude() {  # model, prompt, resume(0|1)
   # Copy the arguments out first: `set --` below overwrites the positional parameters.
   model=$1
   resuming=$3
-  set -- -p "$2" --output-format json
+  set -- -p "$2" --output-format stream-json --verbose
   [ "$resuming" = 1 ] && set -- --continue "$@"
   [ -n "$model" ] && set -- --model "$model" "$@"
-  ( harness_env "$model"; exec "$CLAUDE_BIN" $CLAUDE_FLAGS "$@" ) > "$RAW" 2> "$ERRF"
+  spawn_watched _exec_claude "$model" "$@"
   RC=$?
   cat "$ERRF" >> "$OUT" 2>/dev/null
-  jq -r 'if (.is_error // false) then "" else (.result // "") end' < "$RAW" > "$LAST" 2>/dev/null \
-    || : > "$LAST"
+  # Slurped, so one NDJSON stream and one bare object both parse. Prefer the last `result`
+  # event; fall back to the last object for a harness that emits a single blob.
+  jq -rs '[ .[] | select(type == "object") ]
+          | ((map(select(.type == "result")) | last) // last // {})
+          | if (.is_error // false) then "" else (.result // "") end' \
+     < "$RAW" > "$LAST" 2>/dev/null || : > "$LAST"
   return "$RC"
 }
 
@@ -248,11 +334,13 @@ run_claude() {  # model, prompt, resume(0|1)
 # prompt as $1, resume signalled by FACTORY_RESUME=1, model in FACTORY_MODEL, final
 # assistant message written to FACTORY_LAST_MESSAGE_FILE. Stdout is the fallback and is
 # worse — it carries tool output the detector will misread.
+_exec_pluggable() {  # launcher, model, prompt, resume(0|1)
+  export FACTORY_RESUME="$4" FACTORY_MODEL="$2" FACTORY_LAST_MESSAGE_FILE="$LAST"
+  exec "$1" "$3"
+}
+
 run_pluggable() {  # launcher, model, prompt, resume(0|1)
-  (
-    export FACTORY_RESUME="$4" FACTORY_MODEL="$2" FACTORY_LAST_MESSAGE_FILE="$LAST"
-    exec "$1" "$3"
-  ) > "$RAW" 2> "$ERRF"
+  spawn_watched _exec_pluggable "$1" "$2" "$3" "$4"
   RC=$?
   cat "$ERRF" >> "$OUT" 2>/dev/null
   [ -s "$LAST" ] || cp "$RAW" "$LAST" 2>/dev/null || : > "$LAST"
@@ -305,6 +393,9 @@ is_refusal_text() {
 # Prints `ok`, `refusal:<source>`, or a cause token. The breadcrumb outranks a clean exit
 # because StopFailure only fires when a turn ended on an API error.
 classify() {
+  # The watchdog outranks everything: we killed the harness, so its exit status is our
+  # signal, not its own, and any breadcrumb predates the stall.
+  [ "${STALLED:-0}" = 1 ] && { printf 'stalled-no-output'; return 0; }
   c=$(breadcrumb_class) || c=
   if [ -n "$c" ]; then
     if is_refusal_class "$c"; then printf 'refusal:%s' "$c"; else printf '%s' "$c"; fi

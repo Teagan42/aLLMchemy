@@ -41,6 +41,13 @@ case "$outcome" in
   fail)     printf 'Could not load AWS credentials\n' >&2; exit 1 ;;
   weird)    printf 'ouroboros\n' >&2; exit 99 ;;
   refusal)  printf '{"result":"I cannot help with that. The request violates the content policy."}\n'; exit 0 ;;
+  # Wedged: never returns, never writes. The failure mode a wall-clock cap cannot tell from
+  # legitimately slow local inference.
+  hang)     sleep 600; exit 0 ;;
+  # Slow but productive. Must survive the watchdog: emits NDJSON events, then a result.
+  slow)     for _ in 1 2 3 4; do printf '{"type":"system","subtype":"tool_use"}\n'; sleep 1; done
+            printf '{"type":"result","result":"All 9 gates pass. Deployed to https://x.example."}\n'
+            exit 0 ;;
   crumb:*)  printf 'class=%s session=s1 ts=1970-01-01T00:00:00Z\n' "${outcome#crumb:}" >> "$FACTORY_API_FAILURE_FILE"
             printf 'upstream error\n' >&2; exit 1 ;;
   *)        printf 'unscripted fake outcome: %s\n' "$outcome" >&2; exit 42 ;;
@@ -93,7 +100,15 @@ ck "first attempt does not resume"    "$(ynx "$T/fake/argv.1" '--continue')" no
 ck "gateway env reached the harness"  "$(yn "$T/fake/env.1" 'ANTHROPIC_BASE_URL=http://127.0.0.1:4000')" yes
 ck "no local model forced"            "$(yn "$T/fake/env.1" 'ANTHROPIC_MODEL=gpt-oss')" no
 ck "gateway torn down on exit"        "$(exists "$T/fake/gateway-down")" yes
-ck "absent run-opencode.sh skipped"   "$(yn "$T/out" 'tier local-opencode unavailable')" yes
+# OpenCode is opt-in, not default: it wedges often enough that putting it in an unattended
+# chain trades one hang for another.
+ck "opencode not in the default chain" "$(yn "$T/out" 'local-opencode')" no
+
+echo; echo "An opted-in tier whose launcher is absent is skipped, not fatal:"
+new_case 'ok'
+run_sup FACTORY_TIERS="cloud local-opencode"
+ck "exit status"                      "$SRC" 0
+ck "missing launcher skipped"         "$(yn "$T/out" 'tier local-opencode unavailable')" yes
 
 echo; echo "A nonzero exit advances a tier and the next attempt resumes:"
 new_case 'fail
@@ -250,6 +265,24 @@ printf '{"session_id":"abc","hook_event_name":"StopFailure"}' \
 ck "missing matcher becomes unknown"  "$(yn "$HOOKOUT" 'class=unknown')" yes
 printf 'not json' | FACTORY_API_FAILURE_FILE="$HOOKOUT" ./.claude/hooks/on-api-failure.sh
 ck "garbage payload fails open"       "$?" 0
+
+echo; echo "A wedged harness is killed and failed over, not waited on forever:"
+new_case 'hang
+ok'
+run_sup FACTORY_STALL_SECS=2 FACTORY_POLL_SECS=1
+ck "exit status"                      "$SRC" 0
+ck "stalled tier handed over"         "$(calls)" 2
+ck "stall named as the cause"         "$(yn "$T/work/DECISIONS.md" 'stalled')" yes
+ck "no process left behind"           "$(pgrep -f "$T/bin/claude" >/dev/null 2>&1 && printf yes || printf no)" no
+
+echo; echo "A slow but productive harness is left alone:"
+# Local inference runs at 25-27 tok/s, so "quiet for a while" must not mean "wedged".
+new_case 'slow'
+run_sup FACTORY_STALL_SECS=3 FACTORY_POLL_SECS=1
+ck "exit status"                      "$SRC" 0
+ck "never retried"                    "$(calls)" 1
+ck "no failover recorded"             "$(drows)" 0
+ck "final message survived NDJSON"    "$(yn "$T/out" 'run complete')" yes
 
 [ -n "$T" ] && rm -rf "$T"
 echo; [ "$fails" -eq 0 ] && echo "all pass" || echo "$fails failing"
