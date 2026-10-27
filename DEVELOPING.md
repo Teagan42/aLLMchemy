@@ -241,8 +241,26 @@ One logical change per commit.
 - **Never mix a refactor with a behaviour change.** They are reviewed differently and they
   bisect differently. A diff that moves code and changes it hides the change.
 - **Commit only on green.** `make check` first.
-- Imperative subject under about 72 characters. The body explains **why**, not what — the diff
-  already says what.
+- **Conventional Commits, enforced.** `<type>(<scope>)!: <description>`, header under 72
+  characters, no trailing period, blank line before the body. The body explains **why**, not
+  what — the diff already says what. `dev/check-commits.sh` is the rule; the `commit-msg` hook
+  runs it locally and the `commits` workflow runs the same script on every commit in a PR.
+
+  This is not style policing. `release-please` derives the next version from these types, so a
+  wrong one does not fail loudly — it ships the change with **no release at all**:
+
+  | Type | Effect |
+  |---|---|
+  | `feat` | minor bump while 0.x, minor after 1.0 |
+  | `fix`, `perf` | patch bump |
+  | `feat!`, or a `BREAKING CHANGE:` footer | minor while 0.x, major after 1.0 |
+  | `docs`, `test`, `ci`, `chore`, `refactor`, `style`, `build`, `revert` | changelog only |
+
+  A squash merge takes the **PR title** as the subject, so the title is what decides the
+  release. CI checks it separately for that reason — valid branch commits are not enough.
+
+  History before this rule is not conventional and is never scanned: the workflow checks only
+  `origin/main..HEAD`.
 - **Seam 12 moves in one commit.** `intake.schema.json`, `QUESTIONNAIRE.md` and
   `intake.example.yaml` describe the same contract three times. A commit that changes one
   leaves the tree in a state `node bin/validate-intake.mjs --check-docs` fails: it requires
@@ -251,6 +269,37 @@ One logical change per commit.
   `--check-docs` is the one that holds the seam. Change all three or none.
 
 Do not add a trailer or co-author line that this repo's history does not already use.
+
+## Releases
+
+Nobody picks a version number. `release-please` reads the conventional-commit history on
+`main`, keeps a release PR up to date with the computed version and changelog, and on merge
+tags the commit and publishes the GitHub release.
+
+```
+PR merged to main  ->  release-please opens/updates a release PR
+release PR merged  ->  tag vX.Y.Z + GitHub release + CHANGELOG.md + version.txt
+release published  ->  release-assets re-runs the gate, packages the bundle, attaches it
+```
+
+`release-assets` runs `make check` again against the tag before packaging. That is not
+belt-and-braces: release-please's PR is opened by `GITHUB_TOKEN`, and a PR opened by that
+token does not trigger other workflows, so `ci` never ran on the release PR itself.
+
+The bundle is the tree minus `.git`, `.github` and `artifacts` — `dev/` and the `Makefile`
+stay in, because `README.md`, `AGENTS.md` and this file all reference those paths and a
+bundle whose own documentation points at missing files is worse than a slightly larger one.
+Packaging unpacks the tarball and runs the suites against the extracted copy, since a lost
+exec bit or an over-broad exclude only shows up there.
+
+Two things live outside this repo and both fail confusingly:
+
+- **Settings → Actions → General → "Allow GitHub Actions to create and approve pull
+  requests"** must be on, or release-please 403s instead of opening its PR.
+- There is **no Dockerfile**, so `docker` detects that and no-ops. The container belongs to
+  the generated product (`playbook/deploy-pipeline.md`'s local-container fallback tier), not
+  to the factory. Add one at the root or one level down and it starts building and pushing to
+  GHCR with no edit to the workflow.
 
 ## Getting started
 
