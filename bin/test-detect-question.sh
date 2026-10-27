@@ -58,8 +58,11 @@ C_SUB="${TMPDIR:-/tmp}/no-questions-guard-SubagentStop-sub1.count"
 C_TS="${TMPDIR:-/tmp}/no-questions-tscript-Stop-main.count"
 rm -f "$C_STOP" "$C_SUB" "$C_TS"
 
+# FACTORY_RUN is what arms the guard: the hook stands down without it, because an unset
+# value means a human is present. Every case below asserts factory-run behaviour, so it
+# declares that context. The gate itself is covered separately at the end.
 hook() {  # payload -> BLOCK|ALLOW
-  if [ -n "$(printf '%s' "$1" | "$HOOK")" ]; then printf BLOCK; else printf ALLOW; fi
+  if [ -n "$(printf '%s' "$1" | FACTORY_RUN=1 "$HOOK")" ]; then printf BLOCK; else printf ALLOW; fi
 }
 
 hcheck() {  # label, payload, expect(BLOCK|ALLOW)
@@ -116,6 +119,24 @@ hcheck "transcript fallback blocks" \
   "$(printf '{"session_id":"tscript","hook_event_name":"Stop","transcript_path":"%s","stop_hook_active":true}' "$D/g.jsonl")" BLOCK
 rm -rf "$D"
 rm -f "$C_STOP" "$C_SUB" "$C_TS"
+
+# The guard is a property of a factory run, not of this repository. Developing the package
+# is a conversation, and a blocked question stalls it. Without this the hook fires during
+# its own development, which is how the rule got applied to the wrong context once already.
+echo; echo "Claude hook adapter — stands down outside a factory run:"
+C_SD="${TMPDIR:-/tmp}/no-questions-standdown-Stop-main.count"
+rm -f "$C_SD"
+SD='{"session_id":"standdown","hook_event_name":"Stop","stop_hook_active":true,"last_assistant_message":"Which option would you prefer?"}'
+r=$(if [ -n "$(printf '%s' "$SD" | env -u FACTORY_RUN "$HOOK")" ]; then printf BLOCK; else printf ALLOW; fi)
+if [ "$r" = ALLOW ]; then
+  printf '  PASS  %-40s %s\n' "no FACTORY_RUN allows a question" "$r"
+else
+  printf '  FAIL  %-40s got %s want ALLOW\n' "no FACTORY_RUN allows a question" "$r"; fails=$((fails + 1))
+fi
+# And the same payload must still block once armed, so the test proves the gate rather
+# than a broken detector.
+hcheck "same payload blocks once armed" "$SD" BLOCK
+rm -f "$C_SD"
 
 echo; [ "$fails" -eq 0 ] && echo "all pass" || echo "$fails failing"
 exit "$fails"
