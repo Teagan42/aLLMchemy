@@ -39,11 +39,26 @@ The unit of work the foundry schedules, journals and resumes. Finer-grained than
 **Phase**:
 An inherited grouping of steps describing the shape of a run — preflight, invent, scaffold, billing, surface, release, verify, handoff. Descriptive; the step graph is what executes.
 
+**Attempt**:
+One execution of a step. A step keeps its identity across attempts; an attempt does not, because telling the third attempt from the first is the point of recording one.
+
 **Completion predicate**:
-The check a step declares so the foundry can determine independently whether that step already happened, without trusting a record of it.
+The check a step declares so the foundry can determine independently whether that step already happened, without trusting a record of it. It may answer satisfied, unsatisfied, or **unevaluable** — and the third answer is not a kind of "no".
 
 **Journal**:
-A run's append-only record of what occurred. It corroborates the state of a run; it is not the sole authority on it, because a process can die between an effect and its record.
+A run's append-only record of facts observed and decisions taken. A run's state is *derived* from it, never asserted in it, because a process can die between an effect and its record.
+
+**Intent**:
+The foundry's record that it is about to act on the outside world, written before it acts. An intent with no matching confirmation is the signal to go and look.
+
+**Confirmation**:
+The foundry's record that an external act completed, written after it completes.
+
+**Idempotency key**:
+A value identifying one external effect, derived only from durable facts so it survives a restart unchanged and a retry presents the same one.
+
+**Reconciliation**:
+Asking a provider what actually exists, when the foundry cannot tell from its own records. The provider is the authority; reconciliation is how the journal catches up to it.
 
 **Harness**:
 A third-party coding-agent runtime the foundry drives to perform generative work. Replaceable, and never trusted.
