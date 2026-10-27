@@ -1,0 +1,89 @@
+{
+  "permissions": {
+    "deny": [
+      "AskUserQuestion",
+      "ExitPlanMode"
+    ],
+    "allow": [
+      "Bash(git:*)",
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(pnpm:*)",
+      "Bash(node:*)",
+      "Bash(tsx:*)",
+      "Bash(vitest:*)",
+      "Bash(playwright:*)",
+      "Bash(docker:*)",
+      "Bash(docker-compose:*)",
+      "Bash(curl:*)",
+      "Bash(jq:*)",
+      "Bash(openssl:*)",
+      "Bash(stripe:*)",
+      "Bash(vercel:*)",
+      "Bash(fly:*)",
+      "Bash(flyctl:*)",
+      "Bash(render:*)",
+      "Bash(railway:*)",
+      "Bash(wrangler:*)",
+      "Bash(neonctl:*)",
+      "Bash(supabase:*)",
+      "Bash(turso:*)",
+      "Bash(psql:*)",
+      "Bash(sqlite3:*)",
+      "Bash(prisma:*)",
+      "Bash(drizzle-kit:*)",
+      "Bash(./verify.sh)",
+      "Bash(mkdir:*)",
+      "Bash(ls:*)",
+      "Bash(test:*)",
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "WebFetch",
+      "WebSearch",
+      "Agent",
+      "Skill",
+      "TodoWrite"
+    ]
+  },
+  "env": {
+    "CLAUDE_CODE_MAX_RETRIES": "3"
+  },
+  "hooks": {
+    "StopFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/on-api-failure.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/no-questions.sh"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/no-questions.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+# Copy to intake.yaml. Delete any line to accept its default.
+# An empty file is a valid submission.
+
+product_direction: ""            # e.g. "something useful for small landlords"
+
+billing_provider: auto           # stripe | lemonsqueezy | paddle | polar | auto
+go_live: false                   # false = real deployment, provider test mode
+price_usd: 5
+addons_enabled: true
+
+hosting: auto                    # vercel | fly | render | railway | cloudflare | vps-ssh | auto
+database: auto                   # neon | supabase | turso | planetscale | sqlite-volume | auto
+domain: ""                       # blank = platform subdomain
+region: us-east
+monthly_infra_budget_usd: 25
+
+comms_channel: email             # email | email+sms
+audience_region: us              # us | eu | global
+operator_email: ""
+brand_tone: "plain, friendly, concrete, no hype, no exclamation marks"
+
+escalation: ship-degraded        # ship-degraded | halt
+credentials_file: ./.env.intake
+model_fallback: local            # local | cloud-only

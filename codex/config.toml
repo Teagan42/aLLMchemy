@@ -1,0 +1,21 @@
+# Optional Codex settings for an unattended run.
+#
+# Codex reads ~/.codex/config.toml, not this file. Merge the keys you want, or skip it
+# entirely — bin/run-codex.sh passes the equivalent flags on the command line, which is
+# the path that does not depend on config discovery.
+#
+# Key names and flags move between Codex versions. If a key is rejected, check
+# `codex --help` and `codex exec --help` rather than trusting this file.
+
+# Approval prompts are a human interaction by another name; an unattended run hangs on the
+# first one. Either set these, or rely on the wrapper's CLI flags.
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+# The run deploys to real providers and needs outbound network access.
+[sandbox_workspace_write]
+network_access = true
+
+# A deploy-and-verify run is long. Raise if the harness truncates it.
+# model = "gpt-5-codex"
+# model_reasoning_effort = "high"

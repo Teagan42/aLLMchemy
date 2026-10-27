@@ -1,0 +1,36 @@
+# Interrogative patterns, one extended-regex per line. Blank lines and # comments ignored.
+# Shared by the Claude Code Stop hook and the Codex wrapper so both harnesses enforce one
+# rule. Matched case-insensitively against the final message with fenced code, quoted
+# spans, and table rows already stripped.
+#
+# Edit here, never in a harness adapter, then run bin/test-detect-question.sh.
+
+# A line that ends in a question mark.
+\?[[:space:]]*$
+
+# An auxiliary aimed at the user or the pair, with a question mark later on the line.
+(would|should|shall|do|did|can|could|may|will) (you|i|we)\b.*\?
+
+# Solicitation idioms that need no question mark. These are the phrasings a model reaches
+# for after a question mark has been blocked once, so they matter more than the bare `?`.
+\b(let me know|please (confirm|clarify|advise|specify|choose|provide|tell))\b
+\b(awaiting|waiting) (for |on )?(you|your|further)\b.*\b(input|answer|response|confirmation|approval|decision|instructions|to (pick|choose|decide|confirm|specify))\b
+\bbefore (i|we) (proceed|continue)\b.*\b(confirm|know|decide)\b
+\b(which|what) (one|option|would you|do you) (prefer|want|like|choose)\b
+\b(could|would|can) you (confirm|clarify|decide|choose|tell|specify|advise|pick|let)\b
+\byour (input|answer|decision|approval|confirmation|sign-?off) is (needed|required)\b
+\buntil you (decide|confirm|choose|pick|respond|say)\b
+\btell me (which|what|whether)\b
+
+# Offering a choice instead of making one.
+\b(option [ab]|either way)\b.*\b(you|your) (call|choice|preference)\b
+
+# Soliciting an answer. A bare "need you to <anything>" is deliberately not matched:
+# playbook/autonomy-contract.md requires the report to state what a human should do next,
+# so only the answer-seeking verbs count.
+\b(i|we) (need|require) (your|you) (input|guidance|decision|answer|confirmation|approval|sign-?off)\b
+\b(i|we) (need|require) you to (confirm|clarify|decide|choose|tell|specify|advise)\b
+
+# A bare imperative aimed at the user. "Confirm the domain" is an instruction only a human
+# can act on, so it stalls an unattended run exactly as a question would.
+^[[:space:]]*(please[[:space:]]+)?(confirm|clarify|decide|choose|pick|specify)\b

@@ -1,0 +1,8 @@
+# The operator's credentials land here. Secrets must be unstageable before they exist,
+# per playbook/autonomy-contract.md — not after someone notices.
+.env*
+!.env.example
+
+# Run output: verify.sh artifacts and launcher transcripts. intake.yaml is deliberately
+# absent here — QUESTIONNAIRE.md commits it and keeps only the credentials file out.
+artifacts/
