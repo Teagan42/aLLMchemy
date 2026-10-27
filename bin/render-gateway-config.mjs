@@ -1,0 +1,211 @@
+#!/usr/bin/env node
+// Renders the LiteLLM gateway config from gateway/providers.conf and FACTORY_MODEL_CHAIN.
+//
+// The chain's order is the whole configuration: position 1 is primary, the rest are
+// fallbacks in order. Generating both the model_list and the fallbacks from one registry is
+// what stops a provider from being named one thing in the config and another in the
+// launcher — a mismatch that fails silently and completely.
+//
+// Usage: render-gateway-config.mjs [--chain "a b c"] [--out FILE] [--print]
+
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+
+const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '..');
+
+const DEFAULTS = {
+  FACTORY_PRIMARY_MODEL: 'bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+  FACTORY_PRIMARY_API_BASE: '',
+  FACTORY_OLLAMA_MODEL: 'gpt-oss:20b',
+  FACTORY_OLLAMA_MODEL2: 'qwen3:8b',
+  FACTORY_MLX_MODEL: 'mlx-community/Qwen3-4B-Instruct-2507-4bit',
+  FACTORY_MLX_API_BASE: 'http://127.0.0.1:8099/v1',
+};
+
+// Bedrock's LiteLLM path treats "" as a real endpoint and dies, so resolve a default per
+// provider rather than emitting an empty api_base.
+function primaryApiBase(model) {
+  if (process.env.FACTORY_PRIMARY_API_BASE) return process.env.FACTORY_PRIMARY_API_BASE;
+  const region = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'us-east-1';
+  if (model.startsWith('bedrock/')) return `https://bedrock-runtime.${region}.amazonaws.com`;
+  if (model.startsWith('anthropic/')) return 'https://api.anthropic.com';
+  return '';
+}
+
+function env(name) {
+  return process.env[name] ?? DEFAULTS[name] ?? '';
+}
+
+function expand(s) {
+  return s.replace(/\$\{([A-Z0-9_]+)\}/g, (_, k) => env(k));
+}
+
+export function parseProviders(text) {
+  const out = new Map();
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const col = line.split('|').map(c => c.trim());
+    if (col.length < 5) throw new Error(`providers.conf: need 5 columns, got ${col.length}: ${line}`);
+    const [name, model, apiBase, local, tools] = col;
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error(`providers.conf: bad provider name "${name}"`);
+    if (!['yes', 'no'].includes(local)) throw new Error(`providers.conf: ${name}: local must be yes|no`);
+    if (!['yes', 'no', 'unknown'].includes(tools)) throw new Error(`providers.conf: ${name}: tools must be yes|no|unknown`);
+    out.set(name, { name, model: expand(model), apiBase: expand(apiBase), local: local === 'yes', tools });
+  }
+  return out;
+}
+
+export function resolveChain(providers, chainStr) {
+  const chain = chainStr.trim().split(/\s+/).filter(Boolean);
+  if (!chain.length) throw new Error('FACTORY_MODEL_CHAIN is empty: there is nothing to serve');
+  const seen = new Set();
+  const resolved = chain.map(name => {
+    if (!providers.has(name)) {
+      throw new Error(`FACTORY_MODEL_CHAIN names unknown provider "${name}". Known: ${[...providers.keys()].join(' ')}`);
+    }
+    if (seen.has(name)) throw new Error(`FACTORY_MODEL_CHAIN repeats "${name}"`);
+    seen.add(name);
+    return providers.get(name);
+  });
+  // A provider that cannot emit tool_use cannot drive an agentic run. `unknown` is allowed
+  // to lead only once gateway/probe.sh has confirmed it; up.sh enforces that.
+  if (resolved[0].tools === 'no') {
+    throw new Error(`provider "${resolved[0].name}" cannot make tool calls, so it cannot be primary`);
+  }
+  for (const p of resolved) {
+    if (!p.model || p.model.includes('${')) throw new Error(`provider "${p.name}": model unresolved ("${p.model}")`);
+  }
+  return resolved;
+}
+
+function entry(p, nameOverride) {
+  const lines = [
+    `  - model_name: ${nameOverride ?? p.name}`,
+    `    litellm_params:`,
+    `      model: ${p.model}`,
+  ];
+  const base = p.name === 'cloud' ? primaryApiBase(p.model) : p.apiBase;
+  if (base) lines.push(`      api_base: ${base}`);
+  // LiteLLM's Anthropic handler demands a key even when the server ignores the value.
+  if (p.local) lines.push(`      api_key: local-ignored`);
+  if (!p.local) lines.push(`      api_key: os.environ/FACTORY_PRIMARY_API_KEY`);
+  return lines.join('\n');
+}
+
+export function render(resolved, _chainStr) {
+  const chainLabel = resolved.map(p => p.name).join(' -> ');
+  const fallbacks = [];
+  for (let i = 0; i < resolved.length - 1; i++) {
+    const rest = resolved.slice(i + 1).map(p => `"${p.name}"`).join(', ');
+    fallbacks.push(`    - ${resolved[i].name}: [${rest}]`);
+  }
+  // Claude Code issues haiku-class calls under model names the chain does not define, and
+  // every one of them 400s without a wildcard. Prefer a local provider: these calls are
+  // frequent and small, so routing them to the cloud primary spends money for nothing.
+  const wildcard = resolved.find(p => p.local && p.tools !== 'no') ?? resolved[0];
+
+  return `# GENERATED by bin/render-gateway-config.mjs — do not edit.
+# Source of truth: gateway/providers.conf plus FACTORY_MODEL_CHAIN.
+# Chain: ${chainLabel}
+#
+# No credential is written here. Cloud auth resolves from the provider's ambient
+# environment (AWS_PROFILE/AWS_REGION, or FACTORY_PRIMARY_API_KEY).
+
+model_list:
+${resolved.map(p => entry(p)).join('\n\n')}
+
+${entry(wildcard, '"*"')}
+
+router_settings:
+  # The ordered chain. Covers auth, quota, network, 5xx, timeout, malformed and unknown —
+  # every failure class except one.
+  fallbacks:
+${fallbacks.length ? fallbacks.join('\n') : '    []'}
+
+  # content_policy_fallbacks IS DELIBERATELY UNSET AND MUST STAY UNSET.
+  # A safety or policy refusal is an answer, not an outage. Re-rolling it on a second model
+  # until one complies is laundering, not failover.
+
+  # An unattended run cannot wait out a cooldown, and retrying a dead credential only
+  # spends wall clock. Fail the group over on the first error instead.
+  num_retries: 0
+  allowed_fails: 100
+  cooldown_time: 0
+
+litellm_settings:
+  # Claude Code sends fields no local model accepts. Dropping them beats 400ing the turn.
+  drop_params: true
+
+general_settings:
+  master_key: os.environ/GATEWAY_MASTER_KEY
+`;
+}
+
+function main(argv) {
+  let chain = process.env.FACTORY_MODEL_CHAIN || 'cloud ollama ollama2';
+  let out = resolve(ROOT, 'artifacts/litellm.generated.yaml');
+  let print = false;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--chain') chain = argv[++i] ?? '';
+    else if (argv[i] === '--out') out = resolve(argv[++i] ?? out);
+    else if (argv[i] === '--print') print = true;
+    else if (argv[i] === '--providers') process.env.FACTORY_PROVIDERS_FILE = argv[++i];
+    else {
+      process.stderr.write(`render-gateway-config: unknown argument ${argv[i]}\n`);
+      return 2;
+    }
+  }
+  const file = process.env.FACTORY_PROVIDERS_FILE || resolve(ROOT, 'gateway/providers.conf');
+  const providers = parseProviders(readFileSync(file, 'utf8'));
+  const resolved = resolveChain(providers, chain);
+  const yaml = render(resolved, chain);
+  if (print) {
+    process.stdout.write(yaml);
+    return 0;
+  }
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, yaml);
+
+  // Sidecar so gateway/up.sh never re-parses providers.conf. Two parsers of one registry
+  // is how the config and the launcher end up disagreeing about a provider.
+  const wildcard = resolved.find(p => p.local && p.tools !== 'no') ?? resolved[0];
+  const locals = resolved.filter(p => p.local);
+  // Distinct ENDPOINTS, not providers: two models on one Ollama server swap inside it and
+  // cost nothing extra, while two servers each hold their own weights and fight for RAM.
+  const localHosts = [...new Set(locals.map(p => p.apiBase))];
+  const sh = [
+    `# GENERATED by bin/render-gateway-config.mjs — do not edit.`,
+    `CHAIN_NAMES="${resolved.map(p => p.name).join(' ')}"`,
+    `CHAIN_PRIMARY="${resolved[0].name}"`,
+    `CHAIN_PRIMARY_TOOLS="${resolved[0].tools}"`,
+    `CHAIN_WILDCARD="${wildcard.name}"`,
+    `CHAIN_LOCALS="${locals.map(p => p.name).join(' ')}"`,
+    `CHAIN_LOCAL_COUNT="${locals.length}"`,
+    `CHAIN_LOCAL_HOSTS="${localHosts.length}"`,
+    ...resolved.map(p =>
+      `PROVIDER_${p.name.replace(/-/g, '_').toUpperCase()}="${p.model}|${p.apiBase}|${p.local ? 'yes' : 'no'}|${p.tools}"`),
+    '',
+  ].join('\n');
+  writeFileSync(out.replace(/\.ya?ml$/, '') + '.env', sh);
+
+  process.stdout.write(`render-gateway-config: ${out}\n`);
+  process.stdout.write(`  chain: ${resolved.map(p => p.name).join(' -> ')}\n`);
+  const unknown = resolved.filter(p => p.tools === 'unknown').map(p => p.name);
+  if (unknown.length) process.stdout.write(`  tool support unprobed: ${unknown.join(' ')}\n`);
+  if (localHosts.length > 1) {
+    process.stdout.write(`  WARNING ${localHosts.length} local inference servers in one chain (${localHosts.join(' ')}):\n`);
+    process.stdout.write(`    each holds its own weights. Loading the second evicts or OOMs the first.\n`);
+  }
+  return 0;
+}
+
+// Importable for tests; only the CLI path exits.
+if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) {
+  try {
+    process.exit(main(process.argv.slice(2)));
+  } catch (err) {
+    process.stderr.write(`render-gateway-config: ${err.message}\n`);
+    process.exit(1);
+  }
+}

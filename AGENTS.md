@@ -152,7 +152,7 @@ jobs. These are run-mode only.
 - Honour the budget ladder in `playbook/autonomy-contract.md`. Past 80%, stop feature work
   and spend the remainder on deploy, verify, and handoff.
 - A failed model request is not a question and not a reason to stop. It fails over down the
-  chain — harness retries, then `gateway/litellm.yaml`'s model fallback ending local, then
+  chain — harness retries, then the `gateway/providers.conf` chain ending local, then
   `bin/run-factory.sh`'s tier advance, which resumes rather than restarts — and the failover
   gets a `DECISIONS.md` row plus the achieved model tier in `HANDOFF.md`. Ladder in
   `playbook/autonomy-contract.md`, "Model availability".

@@ -17,6 +17,39 @@ ten times the wall clock. The chain has to live below the harness. That is this 
 Layer 2, the per-run supervisor that restarts a whole run on the local tier, lives
 elsewhere and calls `gateway/probe.sh` to decide whether the local tier is usable.
 
+## Configuring the chain
+
+`gateway/providers.conf` is the registry; `FACTORY_MODEL_CHAIN` is the order. Position 1 is
+primary, the rest are fallbacks in order, so **a local provider is primary or backstop by
+reordering one string** — no edit to the registry and no hand-written config.
+
+```sh
+FACTORY_MODEL_CHAIN="cloud ollama"   ./gateway/up.sh   # cloud primary, local backstop
+FACTORY_MODEL_CHAIN="mlx ollama"     ./gateway/up.sh   # local primary; nothing leaves the box
+FACTORY_MODEL_CHAIN="ollama cloud"   ./gateway/up.sh   # local primary, cloud rescue
+FACTORY_MODEL_CHAIN="cloud"          ./gateway/up.sh   # no fallback; a lapse is a BLOCKER
+```
+
+`bin/render-gateway-config.mjs` renders both the LiteLLM `model_list` and its `fallbacks`
+from that one registry, plus a sidecar the shell scripts read. Generating both is the point:
+a provider named one thing in the config and another in the launcher fails silently and
+totally, and that is the failure this design is most exposed to.
+
+The renderer refuses, rather than rendering something that routes nowhere: an empty chain, an
+unknown or repeated provider name, an unresolved model id, and a primary that cannot make
+tool calls — a provider that cannot emit `tool_use` cannot drive an agentic run at all.
+
+Ships with `cloud`, `ollama`, `ollama2` and `mlx`. Ollama speaks the Anthropic Messages API
+natively, so it is a passthrough; MLX speaks OpenAI chat-completions, so LiteLLM translates.
+MLX is marked `tools=unknown` on purpose — `mlx-lm`'s server has had patchy tool-calling
+support, and unverified capability is not capability. Probe it with `./gateway/probe.sh
+--tool-call` before trusting it to lead.
+
+**Two local providers on different servers evict each other.** Each holds its own weights, so
+`mlx ollama` on a 32 GB machine OOM-kills one of them — measured, not theorised. `up.sh`
+refuses that chain unless `FACTORY_ALLOW_MULTI_LOCAL=1`. Two models on the *same* server
+(`ollama ollama2`) just swap inside it and are fine.
+
 ## Use
 
 ```sh
@@ -41,7 +74,7 @@ port present as flaky inference, which is expensive to diagnose and easy to prev
 | 3 | `local-qwen` | `qwen3:8b`, for when the first model is evicted from VRAM |
 | — | `"*"` | `gpt-oss:20b`. Required: Claude Code's haiku-class calls 400 without it |
 
-No credential is written into `gateway/litellm.yaml`. `FACTORY_PRIMARY_MODEL` carries its
+No credential is written into the rendered config. `FACTORY_PRIMARY_MODEL` carries its
 own provider prefix, so credentials resolve from that provider's ambient environment
 (`AWS_PROFILE`/`AWS_REGION`, or `ANTHROPIC_API_KEY`) and the file stays committable.
 
@@ -60,7 +93,7 @@ own chat API. Its one advantage: `num_ctx: 32768` in `litellm_params` propagates
 
 **The tradeoff that matters.** On the passthrough path `num_ctx` is *silently ignored*.
 Context is governed server-side by `OLLAMA_CONTEXT_LENGTH` alone. Adding `num_ctx` to
-`gateway/litellm.yaml` looks like it works and does nothing, so `up.sh` measures the
+The rendered config looks like it works and does nothing, so `up.sh` measures the
 effective context instead of trusting the config.
 
 ## Failure classes covered
@@ -143,7 +176,7 @@ changes, exactly as it does for a single-context harness.
 
 | File | |
 |---|---|
-| `gateway/litellm.yaml` | The chain. Credentials by `os.environ/*` only |
+| `gateway/providers.conf` | The provider registry. `FACTORY_MODEL_CHAIN` orders it; `bin/render-gateway-config.mjs` renders it |
 | `gateway/up.sh` | Preconditions, start, health gate, pidfile under `artifacts/` |
 | `gateway/down.sh` | Stop by pidfile, confirm the port released |
 | `gateway/env.sh` | Sourceable. Sets and unsets the harness variables |

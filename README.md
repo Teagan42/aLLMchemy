@@ -82,7 +82,7 @@ bin/                        SHARED TOOLING
 
 gateway/                    MODEL FAILOVER. Ephemeral LiteLLM proxy; nothing installed globally
   README.md                 The chain, the env, what is deliberately not failed over
-  litellm.yaml              Ordered fallback chain ending at a local Ollama model
+  providers.conf            Provider registry; FACTORY_MODEL_CHAIN orders it
   up.sh                     Starts the proxy via uvx and waits for it to answer
   down.sh                   Stops it
   env.sh                    Exports the harness vars that point at the proxy
@@ -140,7 +140,7 @@ already happened: an expired AWS SSO token took out nine parallel agents mid-run
 | Layer | What it does | Where |
 |---|---|---|
 | Policy | Model unavailability is a ladder, not a stop: retry, fail over, advance tier, then `BLOCKER` | `playbook/autonomy-contract.md`, "Model availability" |
-| Gateway | Per-request ordered fallback down the model chain, ending at a local model. Covers auth, quota, network, 5xx, timeout, malformed, unknown | `gateway/litellm.yaml`, `gateway/up.sh` |
+| Gateway | Per-request ordered fallback down the model chain, ending at a local model. Covers auth, quota, network, 5xx, timeout, malformed, unknown | `gateway/providers.conf`, `gateway/up.sh` |
 | Supervisor | Per-run tier advance when a whole chain or the harness itself dies; resumes the session rather than restarting it | `bin/run-factory.sh` |
 
 The gateway is required because a harness cannot do this alone. Claude Code retries ten times
@@ -163,7 +163,7 @@ It exists so a run finishes and hands off instead of dying in Phase 3 with an em
 handed-off Tier T product you can read, judge and re-run is worth more than nothing. The
 achieved model tier is on `HANDOFF.md`'s first line precisely so the operator can re-run the
 build on a cloud model afterwards — with `DECISIONS.md` and `PRODUCT-SPEC.md` already
-written. Set `model_fallback: cloud-only` to refuse the trade and take a blocker instead.
+written. Set `model_chain: cloud` to refuse the trade and take a blocker instead.
 
 ## Harness differences that matter
 

@@ -80,10 +80,10 @@
       "type": "string",
       "default": "./.env.intake"
     },
-    "model_fallback": {
-      "enum": ["local", "cloud-only"],
-      "default": "local",
-      "description": "local degrades to a local model when cloud models fail; cloud-only blocks instead."
+    "model_chain": {
+      "type": "string",
+      "default": "cloud ollama",
+      "description": "Ordered provider chain from gateway/providers.conf; first is primary, rest are fallbacks."
     }
   }
 }

@@ -3,7 +3,7 @@
 # answered, which is the only evidence that failover happened — the request shape is
 # identical either way, by design.
 #
-#   ./gateway/probe.sh                   trivial request through factory-primary
+#   ./gateway/probe.sh                   trivial request through the chain's primary
 #   ./gateway/probe.sh --tool-call       the local tier can still drive an agent loop
 #   ./gateway/probe.sh --induce-failure  tier 1 unreachable; a local tier must still answer
 #
@@ -16,9 +16,13 @@ cd "$(dirname "$0")/.." || exit 1
 
 GATEWAY_HOST="${GATEWAY_HOST:-127.0.0.1}"
 GATEWAY_PORT="${GATEWAY_PORT:-4000}"
-GATEWAY_CONFIG="${GATEWAY_CONFIG:-gateway/litellm.yaml}"
+GATEWAY_CONFIG="${GATEWAY_CONFIG:-artifacts/litellm.generated.yaml}"
 GATEWAY_MASTER_KEY="${GATEWAY_MASTER_KEY:-sk-factory-local}"
-PROBE_MODEL="${PROBE_MODEL:-factory-primary}"
+# Default to the rendered chain's primary: probing a literal would test the wrong tier
+# whenever the chain is reordered.
+_pr_env="$(dirname "$0")/../artifacts/litellm.generated.env"
+[ -f "$_pr_env" ] && . "$_pr_env"
+PROBE_MODEL="${PROBE_MODEL:-${CHAIN_PRIMARY:-cloud}}"
 PROBE_TIMEOUT="${PROBE_TIMEOUT:-300}"
 
 MODE=trivial

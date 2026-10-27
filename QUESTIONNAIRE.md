@@ -115,21 +115,33 @@ The agent exports this value as `CREDENTIALS_FILE` and `template/preflight.sh` r
 there. The file is optional: if it does not exist, preflight prints `credentials file absent:
 probing the environment only` and probes whatever the environment already carries.
 
-**17. `model_fallback`** — `local` | `cloud-only`. Default `local`.
-What happens when the model the agent is running on stops answering — an expired token, a
-quota wall, a provider outage. Without a fallback this is fatal rather than slow: one run
-lost nine parallel agents to an expired AWS SSO token and shipped nothing. The ladder is in
+**17. `model_chain`** — space-separated provider names. Default `cloud ollama`.
+What the agent does when the model it is running on stops answering — an expired token, a
+quota wall, a provider outage. Without a fallback that is fatal rather than slow: one run lost
+nine parallel agents to an expired AWS SSO token and shipped nothing. The ladder is in
 `playbook/autonomy-contract.md` under "Model availability".
-- `local`: the failover chain ends at a local model on this machine and the run continues the
-  full build on it. **Recommended.** Costs you quality and wall-clock — 25–27 tokens/second,
-  sequential phases only, and a materially simpler product. You get a finished handoff you
-  can re-run on a cloud model instead of a dead run and an empty repo.
-- `cloud-only`: tiers stop before the local model. The run writes a `BLOCKER` with the exact
-  remediation and halts the affected scope. Costs you the run if your cloud credentials lapse
-  unattended; buys you a product no 20B model touched.
 
-Either way the achieved model tier goes on `HANDOFF.md`'s first line, and a safety or policy
-refusal is never re-routed to another model under either setting.
+The order *is* the configuration. The first name is the primary; the rest are fallbacks, tried
+in order. Names come from `gateway/providers.conf`, which ships `cloud`, `ollama`, `ollama2`
+and `mlx`.
+
+| Chain | Means |
+|---|---|
+| `cloud ollama` | Cloud primary, local backstop. The default. |
+| `cloud` | No fallback. A lapsed credential writes a `BLOCKER` and halts the affected scope — buys you a product no small local model touched, and costs you the run. |
+| `mlx ollama` | Local primary, local backstop. Nothing leaves the machine. |
+| `ollama cloud` | Local primary, cloud rescue. Cheap by default, correct when it matters. |
+
+A local primary costs quality and wall-clock: 25–27 tokens/second, sequential phases only,
+and a materially simpler product. It buys a finished handoff you can re-run on a cloud model
+rather than a dead run and an empty repo.
+
+Two providers on different local servers (`mlx` and `ollama` together) each hold their own
+weights and will evict or OOM each other; the gateway refuses that chain unless you set
+`FACTORY_ALLOW_MULTI_LOCAL=1`. Two models on the *same* server are fine.
+
+Whatever the chain, the achieved model tier goes on `HANDOFF.md`'s first line, and a safety or
+policy refusal is never re-routed to another model.
 
 ---
 
@@ -202,6 +214,6 @@ No question. A documented fallback:
 | DNS creds with `domain` set | Platform subdomain. |
 | All email keys | Console/log transport behind the same interface; email tests assert on the outbox. `BLOCKER` logged. |
 | SMS keys with `email+sms` | SMS add-on built and tested against a mock transport, disabled in production config. |
-| The agent's own model credentials, mid-run | Fails over down the gateway chain to a local model and continues the build, or with `model_fallback: cloud-only` logs a `BLOCKER` and halts. Never a question. |
+| The agent's own model credentials, mid-run | Fails over down the gateway chain to a local model and continues the build, or with a `model_chain` of cloud providers only logs a `BLOCKER` and halts. Never a question. |
 
 A `BLOCKER` means `HANDOFF.md` gets the exact command or dashboard click that fixes it.

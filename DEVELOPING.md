@@ -77,6 +77,7 @@ goes. Every suite named below is a `dev/test.sh` suite name unless it is a path:
 | 9 | `template/verify.sh` | `--list`, `--gate <name>`; an artifact file and an exit code | `gates` |
 | 10 | `template/secret-scan.sh`, `template/preflight.sh`, `template/teardown.sh` | exit codes plus stdout contracts: `OK`/`FAIL`/`ABSENT`, `--dry-run` vs `--yes` | `secrets` (scan only) |
 | 11 | `gateway/*.sh` | daemon lifecycle and port state; `probe.sh --induce-failure` is the fallback proof | `failover` |
+| 11b | `bin/render-gateway-config.mjs` | `gateway/providers.conf` + `FACTORY_MODEL_CHAIN` in, a LiteLLM config and a shell sidecar out. Pure: no daemon, no network, so test it by rendering and reading. Both directions matter — a valid chain must render in order, an invalid one must refuse rather than route nowhere | `chain` |
 | 12 | `intake.schema.json` <-> `QUESTIONNAIRE.md` <-> `intake.example.yaml` | three-file consistency | `intake`, via `--check-docs` |
 | 13 | `dev/test.sh` | `--list`, `--quick`, `--suite NAME`; one aggregated exit code | itself; `make check` |
 | 14 | `dev/lint.sh` + `dev/port-rules.txt` + `dev/make-rules.txt` | rule tables as data; one hit list and one exit code | `portability`, plus lint's own `selfcheck` |

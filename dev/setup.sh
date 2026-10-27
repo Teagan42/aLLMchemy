@@ -131,7 +131,7 @@ fi
 if command -v ollama > /dev/null 2>&1; then
   ok ollama "$(version_of ollama)" 'local model tier available'
 else
-  absent ollama 'no local tier; model_fallback: local degrades to cloud-only'
+  absent ollama 'no local tier; drop ollama from model_chain or the gateway refuses to start'
 fi
 
 printf '\nRepository\n'

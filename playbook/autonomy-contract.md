@@ -63,7 +63,7 @@ backoff — 429, 529, 5xx, dropped or stalled streams, expired cloud credentials
 (`CLAUDE_CODE_MAX_RETRIES`, ceiling 15). Nothing to do. Let it finish before concluding
 anything is wrong.
 
-**2. The gateway's per-request fallback.** `gateway/litellm.yaml` defines an ordered model
+**2. The gateway's per-request fallback.** `gateway/providers.conf` plus `model_chain` define an ordered model
 chain ending at a local Ollama model. Any failure class — auth, quota, network, 5xx,
 timeout, malformed, unknown — is re-issued against the next model inside the same request,
 so the caller sees one slow success rather than an error. `gateway/README.md` documents the
@@ -86,7 +86,7 @@ billing, deploy, gates, handoff. It is slower and its product is materially weak
 is the point — it exists so a run finishes and hands off instead of dying mid-phase. Record
 the degradation; do not pre-empt it by narrowing what the local tier may attempt.
 
-`model_fallback: cloud-only` truncates the ladder above the local model: tiers stop there and
+A `model_chain` naming no local provider truncates the ladder: tiers stop there and
 the run blocks instead of degrading. The operator chose a blocker over a weak product, which
 is a legitimate trade and the only supported way to opt out.
 
@@ -96,7 +96,7 @@ is a legitimate trade and the only supported way to opt out.
 different model until one complies is laundering, not failover. It stops the run: record it
 and report it like any other blocker.
 
-This is why `content_policy_fallbacks` is left unset in `gateway/litellm.yaml`. LiteLLM keeps
+This is why `content_policy_fallbacks` is never rendered into the gateway config. LiteLLM keeps
 that error class on a separate key from the general `fallbacks` list precisely so the broad
 retry does not sweep refusals along with timeouts. Setting it would make the carve-out
 unenforceable from inside the run.

@@ -21,4 +21,4 @@ brand_tone: "plain, friendly, concrete, no hype, no exclamation marks"
 
 escalation: ship-degraded        # ship-degraded | halt
 credentials_file: ./.env.intake
-model_fallback: local            # local | cloud-only
+model_chain: cloud ollama     # ordered; first is primary. See gateway/providers.conf

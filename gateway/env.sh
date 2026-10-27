@@ -25,11 +25,19 @@ _gw_reserve=8192
 CLAUDE_CODE_MAX_CONTEXT_TOKENS=$(( _gw_ollama_ctx - _gw_reserve ))
 [ "$CLAUDE_CODE_MAX_CONTEXT_TOKENS" -lt 16384 ] && CLAUDE_CODE_MAX_CONTEXT_TOKENS=16384
 
+# Provider names come from the rendered chain, never from a literal here: the chain is
+# reorderable, so a hardcoded primary silently points the harness at the wrong tier.
+_gw_chain_env="$_gw_root/artifacts/litellm.generated.env"
+if [ -f "$_gw_chain_env" ]; then
+  # shellcheck source=/dev/null
+  . "$_gw_chain_env"
+fi
+
 export ANTHROPIC_BASE_URL="http://$GATEWAY_HOST:$GATEWAY_PORT"
 export ANTHROPIC_API_KEY="$GATEWAY_MASTER_KEY"
-export ANTHROPIC_MODEL="factory-primary"
-# Without this (or the "*" entry in gateway/litellm.yaml) Claude Code's haiku-class calls 400.
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="local-oss"
+export ANTHROPIC_MODEL="${CHAIN_PRIMARY:-cloud}"
+# Without this (or the "*" entry in the rendered config) Claude Code's haiku-class calls 400.
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="${CHAIN_WILDCARD:-${CHAIN_PRIMARY:-cloud}}"
 # 25 tok/s generation makes any idle timeout a false positive mid-answer.
 export API_FORCE_IDLE_TIMEOUT=0
 export CLAUDE_CODE_MAX_CONTEXT_TOKENS
@@ -44,7 +52,7 @@ unset ANTHROPIC_SMALL_FAST_MODEL
 unset AWS_PROFILE
 unset AWS_REGION
 
-unset _gw_root _gw_ollama_ctx _gw_reserve
+unset _gw_root _gw_ollama_ctx _gw_reserve _gw_chain_env
 
 printf 'gateway env: %s model=%s max_context=%s\n' \
   "$ANTHROPIC_BASE_URL" "$ANTHROPIC_MODEL" "$CLAUDE_CODE_MAX_CONTEXT_TOKENS"

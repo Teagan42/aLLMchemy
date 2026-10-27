@@ -18,7 +18,7 @@
 
 set -uo pipefail
 
-SUITES='syntax portability patterns detector failover billing intake gates secrets'
+SUITES='syntax portability patterns detector failover billing intake chain gates secrets'
 # Only failover is slow (~16s; it spawns fake launchers through the supervisor). `secrets`
 # stays in --quick on purpose: a pre-commit hook that does not scan for keys is theatre.
 SLOW='failover'
@@ -275,6 +275,77 @@ suite_intake() {
   # Seam 12: the schema, the questionnaire and the example describe one contract. Nothing
   # cross-read them before, so dropping a question from QUESTIONNAIRE.md was invisible.
   run_cmd 'schema, questionnaire and example agree' node bin/validate-intake.mjs --check-docs
+}
+
+# The provider chain is the failover configuration, so a renderer that accepts a broken
+# chain ships a gateway that routes nowhere. Both directions are asserted: valid chains
+# render in order, invalid ones refuse.
+suite_chain() {
+  R='node bin/render-gateway-config.mjs'
+
+  if $R --chain 'cloud ollama ollama2' --out "$TMP/c1.yaml" > "$TMP/c1.log" 2>&1; then
+    pass 'cloud-first chain renders' 'exit 0'
+  else
+    fail 'cloud-first chain renders' "exit $?"
+    indent "$TMP/c1.log"
+  fi
+  if grep -q '    - cloud: \["ollama", "ollama2"\]' "$TMP/c1.yaml"; then
+    pass 'fallbacks follow chain order' 'cloud -> ollama -> ollama2'
+  else
+    fail 'fallbacks follow chain order' 'missing or reordered'
+  fi
+
+  # The configurability that matters: a local provider leads by reordering alone, with no
+  # edit to providers.conf and no hand-written config.
+  if $R --chain 'mlx cloud' --out "$TMP/c2.yaml" > "$TMP/c2.log" 2>&1 \
+     && grep -q '    - mlx: \["cloud"\]' "$TMP/c2.yaml"; then
+    pass 'a local provider can be primary' 'mlx -> cloud'
+  else
+    fail 'a local provider can be primary' 'mlx-first chain did not render'
+    indent "$TMP/c2.log"
+  fi
+  if grep -q 'CHAIN_PRIMARY="mlx"' "$TMP/c2.env"; then
+    pass 'sidecar names the primary' 'mlx'
+  else
+    fail 'sidecar names the primary' 'CHAIN_PRIMARY wrong or absent'
+  fi
+  # Two local SERVERS each hold their own weights and fight for RAM; two models on one
+  # server just swap inside it. Warning on the latter would cry wolf on the default chain.
+  $R --chain 'mlx ollama cloud' --out "$TMP/c3.yaml" > "$TMP/c3.log" 2>&1
+  if grep -q 'WARNING' "$TMP/c3.log"; then
+    pass 'two local servers warn' 'emitted'
+  else
+    fail 'two local servers warn' 'absent'
+  fi
+  if grep -q 'WARNING' "$TMP/c1.log"; then
+    fail 'one local server stays quiet' 'warned on the default chain'
+  else
+    pass 'one local server stays quiet' 'no warning'
+  fi
+
+  # content_policy_fallbacks must never be an ACTIVE key: a refusal is an answer, not an
+  # outage. The rendered file explains that in a comment, so match uncommented lines only.
+  if grep -E '^[[:space:]]*content_policy_fallbacks' "$TMP/c1.yaml" >/dev/null; then
+    fail 'no content-policy fallback' 'rendered — refusals would be re-rolled'
+  else
+    pass 'no content-policy fallback' 'unset'
+  fi
+
+  printf 'notools | openai/x | http://127.0.0.1:1 | yes | no\n' > "$TMP/bad.conf"
+  for case in 'empty::' 'unknown:cloud nope:' 'duplicate:cloud cloud:' ; do
+    label=${case%%:*}; rest=${case#*:}; chain=${rest%%:*}
+    if $R --chain "$chain" --print >/dev/null 2>&1; then
+      fail "refuses a $label chain" 'rendered anyway'
+    else
+      pass "refuses a $label chain" "exit $?"
+    fi
+  done
+  # A provider that cannot emit tool_use cannot drive an agentic run at all.
+  if FACTORY_PROVIDERS_FILE="$TMP/bad.conf" $R --chain notools --print >/dev/null 2>&1; then
+    fail 'refuses a tool-less primary' 'rendered anyway'
+  else
+    pass 'refuses a tool-less primary' "exit $?"
+  fi
 }
 
 suite_gates() {

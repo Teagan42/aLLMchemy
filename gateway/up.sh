@@ -13,7 +13,11 @@ cd "$(dirname "$0")/.." || exit 1
 
 GATEWAY_HOST="${GATEWAY_HOST:-127.0.0.1}"
 GATEWAY_PORT="${GATEWAY_PORT:-4000}"
-GATEWAY_CONFIG="${GATEWAY_CONFIG:-gateway/litellm.yaml}"
+# Chain order IS the configuration: position 1 is primary, the rest are fallbacks in order.
+# A local provider leads or backstops by changing this string alone.
+FACTORY_MODEL_CHAIN="${FACTORY_MODEL_CHAIN:-cloud ollama ollama2}"
+# Generated, not committed: gateway/providers.conf plus the chain is the source of truth.
+GATEWAY_CONFIG="${GATEWAY_CONFIG:-artifacts/litellm.generated.yaml}"
 GATEWAY_MASTER_KEY="${GATEWAY_MASTER_KEY:-sk-factory-local}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 GATEWAY_LOCAL_MODEL="${GATEWAY_LOCAL_MODEL:-gpt-oss:20b}"
@@ -58,6 +62,37 @@ mkdir -p "$ART" || exit 1
 say()  { printf '%s\n' "$*"; }
 die()  { printf 'gateway: FAIL %s\n' "$*" >&2; exit 1; }
 
+# --- Render the chain ------------------------------------------------------------------
+# Render before anything else reads a provider name: the sidecar it writes is where the
+# rest of this script learns the chain, so nothing here hardcodes a provider.
+command -v node >/dev/null 2>&1 || die "node not on PATH; bin/render-gateway-config.mjs needs it."
+node bin/render-gateway-config.mjs --chain "$FACTORY_MODEL_CHAIN" \
+  --out "$GATEWAY_CONFIG" || die "could not render $GATEWAY_CONFIG from gateway/providers.conf"
+
+CHAIN_ENV="${GATEWAY_CONFIG%.yaml}.env"
+CHAIN_ENV="${CHAIN_ENV%.yml}.env"
+[ -f "$CHAIN_ENV" ] || die "renderer wrote no sidecar at $CHAIN_ENV"
+# shellcheck source=/dev/null
+. "$CHAIN_ENV"
+
+# Reads one column out of the sidecar's PROVIDER_<NAME> row. Indirect expansion keeps this
+# bash 3.2 safe, where associative arrays do not exist.
+provider_field() {  # name, field(1=model 2=api_base 3=local 4=tools)
+  pf_key=$(printf 'PROVIDER_%s' "$1" | tr 'a-z-' 'A-Z_')
+  eval "pf_row=\${$pf_key:-}"
+  printf '%s' "$pf_row" | awk -F'|' -v f="$2" '{ printf "%s", $f }'
+}
+
+# Two local providers in one chain do not share memory: loading the second evicts or OOMs
+# the first. Measured the hard way — an MLX load killed a running Ollama on a 32 GB machine.
+if [ "${CHAIN_LOCAL_HOSTS:-0}" -gt 1 ] && [ "${FACTORY_ALLOW_MULTI_LOCAL:-0}" != 1 ]; then
+  die "chain has $CHAIN_LOCAL_HOSTS local inference servers ($CHAIN_LOCALS) competing for the
+  same memory. The second to load evicts or OOM-kills the first, which reads as flaky
+  inference rather than as a configuration error.
+
+  Pick one local provider, or accept the eviction with FACTORY_ALLOW_MULTI_LOCAL=1."
+fi
+
 # Prints the env block a harness needs. The context value is read back out of
 # gateway/env.sh rather than recomputed, so the two can never disagree about the headroom
 # Claude Code must leave below the Ollama window.
@@ -70,8 +105,8 @@ Harness environment (or: . gateway/env.sh):
 
   export ANTHROPIC_BASE_URL=$BASE
   export ANTHROPIC_API_KEY=$GATEWAY_MASTER_KEY
-  export ANTHROPIC_MODEL=factory-primary
-  export ANTHROPIC_DEFAULT_HAIKU_MODEL=local-oss
+  export ANTHROPIC_MODEL=$CHAIN_PRIMARY
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL=$CHAIN_WILDCARD
   export API_FORCE_IDLE_TIMEOUT=0
   export CLAUDE_CODE_MAX_CONTEXT_TOKENS=$maxctx
   export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
@@ -86,7 +121,7 @@ is_our_gateway() {
   models=$(curl -s --max-time 10 -H "Authorization: Bearer $GATEWAY_MASTER_KEY" \
     "$BASE/v1/models" 2>/dev/null) || return 1
   case "$models" in
-    *'"factory-primary"'*) case "$models" in *'"local-oss"'*) return 0 ;; esac ;;
+    *"\"$CHAIN_PRIMARY\""*) case "$models" in *"\"$CHAIN_WILDCARD\""*) return 0 ;; esac ;;
   esac
   return 1
 }
@@ -127,6 +162,39 @@ command -v uvx >/dev/null 2>&1 || die "uvx not on PATH.
 
 [ -f "$GATEWAY_CONFIG" ] || die "config missing: $GATEWAY_CONFIG"
 
+# Which local runtimes this chain actually needs. Probing one nothing uses would fail the
+# run for an irrelevant reason.
+NEED_OLLAMA=0
+NEED_OPENAI_LOCAL=
+for p in ${CHAIN_LOCALS:-}; do
+  case "$(provider_field "$p" 2)" in
+    *:11434*) NEED_OLLAMA=1
+              # Strip the LiteLLM prefix: `anthropic/gpt-oss:20b` -> `gpt-oss:20b`.
+              GATEWAY_LOCAL_MODEL="$(provider_field "$p" 1 | sed -E 's#^[a-z0-9_]+/##')" ;;
+    *)        NEED_OPENAI_LOCAL="$NEED_OPENAI_LOCAL $p" ;;
+  esac
+done
+
+# OpenAI-compatible local servers — MLX and friends. They are not started for you: a model
+# load is minutes and gigabytes, and guessing one is worse than refusing.
+for p in $NEED_OPENAI_LOCAL; do
+  p_base=$(provider_field "$p" 2)
+  p_model=$(provider_field "$p" 1 | sed -E 's#^openai/##')
+  p_models=$(curl -s --max-time 15 "$p_base/models" 2>/dev/null) || p_models=""
+  case "$p_models" in
+    *'"data"'*) say "gateway: $p reachable at $p_base" ;;
+    *) die "provider $p is not answering at $p_base.
+  It is an OpenAI-compatible server this chain lists; nothing here starts it for you.
+  For MLX:  uvx --from mlx-lm mlx_lm.server --model $p_model --host 127.0.0.1 --port 8099
+  Then re-run. Or drop $p from FACTORY_MODEL_CHAIN." ;;
+  esac
+  case "$p_models" in
+    *"$p_model"*) : ;;
+    *) say "gateway: WARN $p does not list $p_model; the server may hold a different model." ;;
+  esac
+done
+
+if [ "$NEED_OLLAMA" = 1 ]; then
 TAGS=$(curl -s --max-time 10 "$OLLAMA_URL/api/tags" 2>/dev/null) || TAGS=""
 case "$TAGS" in
   *'"models"'*) say "gateway: ollama reachable at $OLLAMA_URL" ;;
@@ -169,7 +237,7 @@ elif [ "$CTX" -lt "$GATEWAY_MIN_CONTEXT" ]; then
   die "ollama context is $CTX, below the $GATEWAY_MIN_CONTEXT floor.
   Claude Code truncates silently at this size and auto-compacts: the model starts
   summarising instead of working, and the run reports success having built nothing.
-  num_ctx cannot fix this — it is ignored on the passthrough path (gateway/litellm.yaml).
+  num_ctx cannot fix this — it is ignored on the Anthropic passthrough path.
 
   Headless ollama:
       pkill -f 'ollama serve'; OLLAMA_CONTEXT_LENGTH=$GATEWAY_MIN_CONTEXT ollama serve &
@@ -180,6 +248,7 @@ else
   printf '%s\n' "$CTX" > "$CTXFILE"
   say "gateway: ollama context $CTX (floor $GATEWAY_MIN_CONTEXT)"
 fi
+fi  # NEED_OLLAMA
 
 # Not fatal. A primary that fails over on its first call is the designed behaviour, not an
 # error — but silently losing tier 1 to a sourced env.sh is worth one line.
@@ -196,15 +265,14 @@ esac
 # --- Start -----------------------------------------------------------------------------
 : > "$LOGFILE"
 GATEWAY_MASTER_KEY="$GATEWAY_MASTER_KEY" \
-FACTORY_PRIMARY_MODEL="$FACTORY_PRIMARY_MODEL" \
-FACTORY_PRIMARY_API_BASE="$FACTORY_PRIMARY_API_BASE" \
+FACTORY_PRIMARY_API_KEY="${FACTORY_PRIMARY_API_KEY:-${ANTHROPIC_API_KEY:-unused}}" \
   uvx --from 'litellm[proxy]' litellm \
     --config "$GATEWAY_CONFIG" --host "$GATEWAY_HOST" --port "$GATEWAY_PORT" \
     >> "$LOGFILE" 2>&1 &
 PID=$!
 printf '%s\n' "$PID" > "$PIDFILE"
 say "gateway: starting litellm pid $PID -> $LOGFILE"
-say "gateway: tier 1 = $FACTORY_PRIMARY_MODEL at $FACTORY_PRIMARY_API_BASE"
+say "gateway: tier 1 = $CHAIN_PRIMARY ($(provider_field "$CHAIN_PRIMARY" 1))"
 
 # --- Health gate -----------------------------------------------------------------------
 # A trivial real completion, not a port check. LiteLLM binds the port well before the
@@ -223,7 +291,7 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
     -H 'content-type: application/json' \
     -H 'anthropic-version: 2023-06-01' \
     "$BASE/v1/messages" \
-    -d '{"model":"local-oss","max_tokens":4,"messages":[{"role":"user","content":"ok"}]}' \
+    -d "{\"model\":\"$CHAIN_WILDCARD\",\"max_tokens\":4,\"messages\":[{\"role\":\"user\",\"content\":\"ok\"}]}" \
     2>/dev/null)
   [ "$CODE" = "200" ] && { READY=1; break; }
   sleep 3
@@ -237,6 +305,6 @@ if [ "$READY" != 1 ]; then
   die "gateway did not serve /v1/messages within ${GATEWAY_READY_TIMEOUT}s. Log above."
 fi
 
-say "gateway: ready on $BASE (chain: factory-primary -> local-oss -> local-qwen)"
+say "gateway: ready on $BASE (chain: $(printf '%s' "$CHAIN_NAMES" | sed 's/ / -> /g'))"
 say "gateway: verify the chain with ./gateway/probe.sh"
 print_env_block
