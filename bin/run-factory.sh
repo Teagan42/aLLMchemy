@@ -68,6 +68,10 @@ PKG_BEFORE=$(git -C "$ROOT" status --porcelain 2>/dev/null | sort)
 # environment — learns where the product lives without parsing argv for --add-dir.
 export FACTORY_PROJECT_DIR="$PROJECT_DIR"
 
+# Marks this as an unattended run. .claude/hooks/no-questions.sh stands down without it,
+# so developing the package stays a conversation while a real run still cannot ask.
+export FACTORY_RUN=1
+
 DETECT="$ROOT/bin/detect-question.sh"
 GATEWAY_DIR="${GATEWAY_DIR:-$ROOT/gateway}"
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"

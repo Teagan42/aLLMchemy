@@ -10,6 +10,15 @@
 
 set -uo pipefail
 
+# The no-questions rule is a property of a FACTORY RUN, not of this repository. Developing
+# the package is a conversation: grilling a human for a decision is the point, and blocking
+# it stalls the work. The launchers export FACTORY_RUN; nothing else does, so an unset value
+# means a human is present and the guard must stand down.
+#
+# Fail open, like every other check here: a guard that cannot tell which context it is in
+# must not block.
+[ -n "${FACTORY_RUN:-}" ] || exit 0
+
 MAX_BLOCKS=3
 ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 DETECT="$ROOT/bin/detect-question.sh"

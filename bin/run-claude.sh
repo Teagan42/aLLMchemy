@@ -14,6 +14,10 @@ command -v "$CLAUDE_BIN" >/dev/null 2>&1 || { echo "claude not found; set CLAUDE
 # Override with CLAUDE_FLAGS="--permission-mode default" to approve interactively instead.
 FLAGS="${CLAUDE_FLAGS---permission-mode bypassPermissions}"
 
+# Arms the Stop hook. Without it the guard stands down, because an unset value means a
+# human is present — which is true when developing the package and false here.
+export FACTORY_RUN=1
+
 exec "$CLAUDE_BIN" $FLAGS "$(cat <<'EOF'
 Read AGENTS.md, then playbook/00-kickoff.md, and execute the run described there.
 No human is available. Never ask a question; resolve every unknown with the decision
