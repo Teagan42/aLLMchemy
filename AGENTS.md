@@ -3,6 +3,58 @@
 Root instructions for this repository. Read before anything else. Codex loads this file
 automatically; Claude Code loads it via `CLAUDE.md`.
 
+## Rules that hold in both jobs
+
+These three sit above the mode router because they are not run-mode policy. They bind a
+developing agent exactly as hard.
+
+### Gate naming
+
+Two sets of gates exist and the numbers collided, so:
+
+- `G1`–`G8` are the product-selection hard gates in `playbook/product-selection.md`.
+- The nine acceptance gates in `playbook/acceptance-gates.md` are named, never numbered:
+  `build`, `core`, `recurrence`, `billing`, `security`, `legal`, `operations`, `cost`,
+  `stranger-path`. Those names are also the `./verify.sh --gate` tokens.
+
+"Gate 8" previously resolved to both the `cost` gate and G8 instant-cancellability. Write
+the name. `dev/test.sh`'s `gates` suite fails on a numeric gate name.
+
+### Secrets
+
+- Never print a secret value. Log `NAME: present` or `NAME: absent`.
+- Never write a secret into the repo. `.gitignore` covers `.env*` with a `!.env.example`
+  exception in the **first** commit, not a later one. `template/secret-scan.sh` is the only
+  sanctioned leak check: it covers history as well as the working tree and exits 0 when
+  clean. A bare `grep … && exit 1` is inverted — it fails clean repos.
+
+### Never weaken a test or a gate
+
+No `.skip`, no loosened assertion, no deleted case, no `@ts-ignore` added to clear a
+typecheck. If a check fails because the code is wrong, fix the code.
+
+## Which job are you doing
+
+Two jobs share this repo, and a wrong guess is expensive in both directions: an agent that
+guesses wrong either invents a micro-SaaS during a development session or tries to interview
+an absent operator during a run.
+
+**Developing this package** — changing the playbook, scripts, gates, template, or docs. Read
+`DEVELOPING.md`. Everything from "What this repository is" down is run-mode instruction and
+does not apply to you; the three sections above do.
+
+**Running the factory** — building a product for an operator. Continue below.
+
+The test, not a judgement call: you are running the factory only if your opening instruction
+came from `bin/run-claude.sh`, `bin/run-codex.sh` or `bin/run-factory.sh` and told you to
+execute the run. That is the whole test. An absent `intake.yaml` does **not** mean you are
+developing — a zero-config submission is legal and every field then takes its schema default
+(`bin/validate-intake.mjs`, `playbook/00-kickoff.md`). Nothing started by hand is a run.
+
+Those three launchers provision real infrastructure and spend real money, under
+`bypassPermissions` with the no-questions hook armed. There is no dry-run flag. Never start
+one to try something out — `DEVELOPING.md` says what to use instead.
+
 ## What this repository is
 
 A handoff package, not an application. One human fills one questionnaire. An agent then
@@ -55,18 +107,6 @@ Platform-neutral. These are the authoritative documents; harness-specific files 
 | `template/README.md` | Phase 3 onward. Runnable scaffold: `verify.sh`, the nine gates, preflight, secret scan, teardown, billing core |
 | `gateway/README.md` | When a model request fails, or to change the fallback chain |
 
-## Gate naming
-
-Two sets of gates exist and the numbers collided, so:
-
-- `G1`–`G8` are the product-selection hard gates in `playbook/product-selection.md`.
-- The nine acceptance gates in `playbook/acceptance-gates.md` are named, never numbered:
-  `build`, `core`, `recurrence`, `billing`, `security`, `legal`, `operations`, `cost`,
-  `stranger-path`. Those names are also the `./verify.sh --gate` tokens.
-
-"Gate 8" previously resolved to both the `cost` gate and G8 instant-cancellability. Write
-the name.
-
 ## Execution modes
 
 The phase sequence is identical on both harnesses. Only the dispatch differs.
@@ -92,11 +132,9 @@ regardless of harness — `playbook/00-kickoff.md` says why.
 
 ## Rules that hold on every harness
 
-- Never print a secret value. Log `NAME: present` or `NAME: absent`.
-- Never write a secret into the repo. `.gitignore` covers `.env*` with a `!.env.example`
-  exception in the **first** commit, not a later one. `template/secret-scan.sh` is the only
-  sanctioned leak check: it covers history as well as the working tree and exits 0 when
-  clean. A bare `grep … && exit 1` is inverted — it fails clean repos.
+The secret rules and "never weaken a test" are above the router, because they bind in both
+jobs. These are run-mode only.
+
 - Provisioning spend is capped by a ledger, not by an assertion. Create free-tier or
   zero-commitment resources freely; anything with a fixed monthly price needs its price plus
   the `PROVISIONED.md` fixed total to be ≤ `monthly_infra_budget_usd` and a `DECISIONS.md`
@@ -107,8 +145,6 @@ regardless of harness — `playbook/00-kickoff.md` says why.
 - A self-reported success never passes a gate. Only `./verify.sh` exiting zero does.
 - Cap repairs at three cycles per gate, then record a `BLOCKER` and move on. A fourth
   attempt on the same failure is how an unattended run dies with nothing shipped.
-- Never weaken a test to make a gate pass. No `.skip`, no loosened assertion, no
-  `@ts-ignore` added to clear a typecheck.
 - Three failures are never downgraded to blockers, because shipping them harms real people:
   a secret committed to the repo, an unauthenticated mutating route, and a billing
   double-charge. If one cannot be fixed, enable the kill switch and ship disabled with the
