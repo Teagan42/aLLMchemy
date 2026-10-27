@@ -232,6 +232,31 @@ feature change.
   tables in `dev/port-rules.txt` and `dev/make-rules.txt`. Add a construct to the table in the
   same commit that bans it.
 
+## Branch, then PR
+
+Never commit to `main`. Every change — feature, fix, docs, chore — starts on a branch cut
+from the **latest** `origin/main` and lands through a pull request.
+
+```sh
+git fetch origin
+git switch -c feat/short-slug origin/main    # not from your stale local main
+...work, commit on green...
+git push -u origin HEAD
+gh pr create --fill                          # title must be a conventional subject
+```
+
+Branch from `origin/main`, not from local `main`: a branch cut from a stale local ref carries
+commits that are already merged, and the `commits` workflow then validates a range that is
+not what you changed.
+
+The branch name is not load-bearing; the **PR title** is. A squash merge takes the title as
+the commit subject, so the title is what `release-please` reads to decide the next version.
+`dev/check-commits.sh --title "<your title>"` checks it before CI does.
+
+`main` is protected by convention here, not by policy, until branch protection is enabled on
+the repository. Until then the rule is only as strong as this document — so follow it even
+when a direct push would work.
+
 ## Architecture decisions
 
 The package's own decisions live in `docs/adr/`, one file per decision, numbered and

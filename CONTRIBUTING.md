@@ -24,3 +24,7 @@ Two things that will bite you if nobody says them out loud:
   Claude-Code-specific way to work around them without touching this repo's settings — are
   listed once, in `DEVELOPING.md`, "Asking questions is correct here". Read it there; do not
   weaken a guard to make your session easier.
+
+Branch from the latest `origin/main` and open a PR; never commit to `main` directly. The PR
+title must be a conventional subject (`feat:`, `fix:`, `docs:` …) because a squash merge uses
+it as the commit subject and `release-please` reads it to pick the next version.
