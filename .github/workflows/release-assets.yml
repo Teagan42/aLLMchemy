@@ -41,7 +41,7 @@ jobs:
           # template/secret-scan.sh refuses a shallow clone, and a release is exactly when
           # a committed key must not slip through.
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - run: make setup
