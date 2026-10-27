@@ -4,7 +4,9 @@ Resolves [#2](https://github.com/Teagan42/aLLMchemy/issues/2). Feeds
 [#5](https://github.com/Teagan42/aLLMchemy/issues/5) (language) and
 [#6](https://github.com/Teagan42/aLLMchemy/issues/6).
 
-**Status: in progress.** Sections land incrementally; each commit is a checkpoint.
+**Recommendation: build a small custom core; spike DBOS Transact over SQLite first to try to falsify that.**
+Jump to [Recommendation](#recommendation), [What we lose](#what-we-lose),
+[Per-language availability](#per-language-availability).
 
 ## Confidence markers
 
@@ -284,16 +286,282 @@ later.
 ### LangGraph and the DAG/agent-framework tier
 
 Not an engine candidate — it is an agent framework whose orchestration is incidental — but it is the closest
-prior art and the next section treats it as such.
+prior art, and the next section treats it as such.
+
+## Prior art: durable agent orchestration
+
+Someone has hit our non-determinism problem. Several people have. What they built tells us two useful things.
+
+**The industry answer is "put the agent call in a durable step", and it is near-unanimous.** Temporal's Python
+SDK ships first-party contrib integrations for `openai_agents`, `langgraph`, `google_adk_agents`, `deepagents`,
+`strands` and `google_genai` (verified: directory listing of `temporalio/contrib` in `temporalio/sdk-python`).
+The OpenAI Agents integration has since graduated to its own package, `temporalio-openai-agents`. That is a
+lot of first-party investment in exactly our architecture, and it is a strong signal that coarse-step durable
+execution over agent invocations is the right *shape*.
+
+**But every one of them confirms the F3 limitation in its own words, and none solves it.**
+
+Temporal's own AI-integration README is the clearest statement of the problem we have found anywhere:
+
+> "Activity code faces no restrictions on I/O or external interactions, but if it fails part-way through it
+> restarts from the beginning."
+>
+> — <https://github.com/temporalio/ai-integrations/tree/main/python/openai_agents#readme>
+
+And its division of labour:
+
+> "In this integration, model invocations are automatically routed through Temporal activities, while the logic
+> that coordinates them lives in the workflow."
+
+**The granularity gap is the point.** Temporal's agent integration makes the *model call* the activity — a
+request lasting seconds, genuinely safe to retry from the top. aLLMchemy's step is a whole bounded harness
+session lasting minutes to hours, which is not. All this prior art lives one or two orders of magnitude below
+our step size, so it does not transfer. Nobody in this set has solved "resume a three-hour agent session that
+already wrote forty files".
+
+**LangGraph** is the closest to our persistence model and is worth reading as a design, not a dependency. It
+checkpoints at super-step boundaries and additionally persists per-node writes, which buys partial recovery
+within a parallel super-step:
+
+> "When a graph node fails mid-execution at a given super-step, LangGraph stores pending checkpoint writes from
+> any other nodes that completed successfully at that super-step. When you resume graph execution from that
+> super-step you don't re-run the successful nodes."
+
+But for the node that actually failed, the answer is the same as everyone else's:
+
+> "Nodes after the checkpoint re-execute, including any LLM calls, API requests, or interrupts — which are
+> always re-triggered during replay."
+
+Its three durability modes are a genuinely good piece of API design worth copying the *vocabulary* of —
+`"exit"` (no mid-execution recovery), `"async"` ("a small risk that LangGraph does not write checkpoints if
+the process crashes"), `"sync"` ("persists changes synchronously before the next step starts"). aLLMchemy
+needs only `sync`, at tens of steps per run, so the knob is not even needed — but naming the trade-off
+explicitly is better than leaving it implicit.
+(<https://docs.langchain.com/oss/python/langgraph/checkpointers.md>)
+
+Two reasons LangGraph is not a candidate: its own docs class the SQLite path as `SqliteSaver`, "Local
+file-based storage for development", with Postgres or the hosted Agent Server as the production answer; and
+adopting it would import an entire agent framework to get a checkpointer, when aLLMchemy's agents are external
+harness subprocesses (map constraint 14) that LangGraph has no role in driving.
+
+**Conclusion from prior art.** The architecture is validated and the hard part is confirmed unsolved. Nobody
+ships predicate-driven resume. That primitive is ours to build under every option on the table.
 
 ## Cost of the custom option
 
-TBD
+Estimates are for one engineer, including tests, to a standard worth trusting with a multi-day run. LOC is
+production code; test code runs 1.5-2x that for the resume layer specifically, because the only way to trust
+it is crash injection at every write point.
+
+### 1. Crash-safe resume — the expensive one
+
+| Part | LOC | Notes |
+|---|---|---|
+| Versioned event envelope, codec, forward migration, refuse-on-unknown (F7) | 300-500 | Map constraint 24 names this; no candidate supplies it in the form we want |
+| SQLite journal store: append, WAL, fsync discipline, single-writer discipline, torn-write detection | 400-600 | Where naive implementations rot |
+| Projection from events to run state (`DECISIONS.md`, `PROVISIONED.md`, `CAPABILITIES.md` per constraint 12) | 300-500 | Needed whether or not an engine is adopted — these are our projections, not an engine's |
+| Recovery: registry scan, journal load, predicate re-evaluation, reconcile | 250-400 | The predicate half is ours under every option |
+| **Subtotal** | **1250-2000** | **3-5 weeks** |
+
+Failure mode if done badly is silent: a run resumes into an inconsistent state weeks later. This is the part
+of the estimate most likely to be optimistic, and the part an engine most plausibly replaces.
+
+### 2. Retry and backoff policy — much cheaper than it looks here
+
+| Part | LOC | Notes |
+|---|---|---|
+| Per-step retry policy: attempt caps, classified-failure dispositions, backoff, jitter | 200-400 | |
+| **Subtotal** | **200-400** | **3-5 days** |
+
+**This is not a reason to adopt an engine, because #11 already gave the retry ladder away.** The gateway owns
+protocol translation, failure classification and "the whole retry ladder", with no cooldowns ever. Model-layer
+retry is therefore already built elsewhere by decision. What remains at the step layer is a thin attempt cap
+plus the three-repair-cycle liveness guard (constraint 19). An engine's retry policy would sit in the wrong
+place and partly duplicate the gateway.
+
+### 3. Timers and cancellation — split sharply in two
+
+| Part | LOC | Notes |
+|---|---|---|
+| Durable timers: persisted wake times, deadline enforcement surviving restart | 200-300 | **An engine does supply this.** DBOS: `Sleep` is a "Durable sleep that survives workflow recovery" (verified in Go source) |
+| Cooperative cancellation at step boundaries | 150-250 | **An engine supplies this too.** DBOS preempts "at the beginning of its next step" |
+| **Process-group and container teardown, orphan reaping after engine crash** | **250-400** | **No engine supplies this, at all** |
+| **Subtotal** | **600-950** | **2-3 weeks** |
+
+The third row is the one that matters and it is worth being blunt about. Cancelling an aLLMchemy step means
+killing a containerised harness subprocess and reaping what it left behind. DBOS cancelling "at the beginning
+of its next step" and Temporal requiring heartbeats before an Activity "can receive a Cancellation" both
+describe cooperative cancellation of *in-process* work. Neither kills a container. And per #22, Codex "handles
+SIGTERM and exits 0", so a cancelled run reports success unless the engine reads the event stream — meaning
+even the signal path is ours to get right. Shopping for cancellation from a workflow engine buys the easy half.
+
+### Totals
+
+| | Production LOC | Calendar |
+|---|---|---|
+| Custom, all three areas | **2050-3350** | **6-9 weeks** |
+| Of which an engine plausibly replaces | ~900-1500 | ~3-4 weeks |
+| Of which no engine replaces | ~1150-1850 | ~3-5 weeks |
+
+**So the honest answer to "does a library supply this for materially less code" is: it supplies a little under
+half, and not the half that is hardest to get right for *our* workload.** The predicate layer, the versioned
+envelopes, the projections and the process-level teardown stay ours under every option.
+
+Two caveats against the estimate's optimism, both real:
+
+- LOC is a poor proxy for the *risk* in resume correctness. 1500 lines of crash-safe journal is not 1500 lines
+  of CRUD. A mature engine's value is the bugs already found in it, which no LOC comparison captures.
+- "6-9 weeks" assumes the design is right first time. It will not be. Budget a revision.
 
 ## Recommendation
 
-TBD
+**Build a small custom event-sourced core over embedded SQLite. Do not adopt a workflow engine. Gate the
+decision behind a time-boxed falsification spike on DBOS Transact, and reverse if the spike succeeds.**
+
+Written to become an ADR:
+
+### Context
+
+aLLMchemy must run tens of coarse, hours-long, non-replayable coding-agent steps on one operator's machine,
+with no daemon, a runtime-extensible graph, and predicate-driven resume (filters F1-F9 above). Candidates were
+Temporal, Restate, DBOS Transact, go-workflows, `dapr/durabletask-go`, Resonate, plus the DAG and task-queue
+tiers.
+
+### Decision
+
+Build the core. Specifically, commit to these primitives and no more:
+
+1. **Versioned event envelope** with a codec and forward migration; an unrecognised event refuses resume
+   rather than skipping it (constraint 24).
+2. **Append-only journal** per run, one SQLite file inside the run's workspace, WAL mode, single writer,
+   explicit fsync at step boundaries. Durability is `sync`-equivalent in LangGraph's vocabulary; no other mode
+   is offered.
+3. **Thin global registry** for listing and resuming runs — run id, workspace path, status, engine build.
+   Nothing authoritative lives here (constraint 20).
+4. **Completion-predicate evaluation** as the resume authority, with the journal corroborating (constraint 9).
+   A step is skipped only when its predicate is satisfied; a journal entry alone is not sufficient.
+5. **Driver loop** whose next move is a journalled planning decision, making the graph runtime-extensible by
+   construction and repair a journalled step insertion (constraint 23).
+6. **Step attempt policy**: attempt cap, backoff with jitter, and the three-repair-cycle liveness guard. Model
+   retry stays in the gateway (#11).
+7. **Durable timers**: persisted wake times and deadlines that survive restart.
+8. **Cancellation** in two layers — a cooperative step-boundary check, and process-group plus container
+   teardown with orphan reaping across engine restarts.
+9. **Projections** from the journal to `DECISIONS.md`, `PROVISIONED.md` and `CAPABILITIES.md`
+   (constraint 12).
+10. **Runtime concurrency control**: a step-admission gate reading the active model tier, not a fixed graph
+    property (F8).
+
+Nothing else. No generic DAG language, no distributed worker protocol, no signals or queries beyond what the
+inspection surface needs, no multi-tenant anything.
+
+### Rationale
+
+- **F1 removes almost everything.** Temporal and Restate both need a process the operator provisions. Temporal
+  does have a SQLite-backed dev server, but ships it stamped "not intended for production use"; Restate needs a
+  server plus an inbound HTTP registration and has no library mode at all.
+- **F3 means no engine's core value reaches us.** Every surviving candidate re-runs a crashed step from the
+  top and tells us to make it idempotent. The deciding evidence is Temporal's own words about its agent
+  integration: an activity "restarts from the beginning". The predicate layer is unavoidable, and once it
+  exists, engine step-memoization is not just redundant — it is **wrong in the exact case constraint 9 exists
+  to handle**: a step whose checkpoint survives but whose evidence does not would be skipped, when it must be
+  re-run. Keeping the predicate authoritative means bypassing the memoizer, and an engine with its memoizer
+  bypassed is a journal with a dependency attached.
+- **Retry was already given away.** #11 put the retry ladder in the gateway. The retry policy an engine
+  supplies would sit at the wrong layer.
+- **Cancellation is a process problem, not a workflow problem.** No candidate kills a container.
+- **The surviving custom scope is small and bounded** — ten primitives, roughly 2000-3400 lines, 6-9 weeks —
+  and every one of them is required under the adoption path too, minus the journal store.
+- **It leaves #5 free.** All ten primitives are equally writable in Python, Go, Rust or TypeScript, so
+  orchestration does not constrain the language choice. Adopting go-workflows would have decided #5 by
+  accident.
+
+### Alternative, and the spike that would select it
+
+**DBOS Transact over SQLite is a genuinely credible alternative and the recommendation should not be read as
+dismissing it.** It is a library, not a server; SQLite is a first-class system database in *both* leading
+languages (Python's default; Go verified from source, with the cgo-free `modernc.org/sqlite` driver preserving
+the single-static-binary story); it supplies the journal, a startup recovery scan, durable `Sleep`, durable
+start-to-completion timeouts, idempotency keys, queues with flow control, and `ForkWorkflow` / `ResumeWorkflow`
+/ `CancelWorkflow` / `ListWorkflows` management primitives. SQLite support landed in Go at v0.16.0
+(2026-06-01), stabilised by v1.0.0 (2026-07-31), and the library is at v1.7.0 (2026-10-15) — past 1.0 and
+actively developed, not a weekend experiment.
+
+Before writing the journal store, spend **3-5 days** trying to falsify this recommendation. Three questions,
+each of which flips the decision if it comes back clean:
+
+1. **Does the driver loop survive replay?** A DBOS workflow running `plan_next_step` -> `execute` over 30+
+   iterations with heterogeneous step functions, killed and restarted mid-step. Does step identity hold, or
+   does it raise `DBOSStepNondeterminismError` / `DBOSUnexpectedStepError`? *(Currently unverified and the
+   single highest-value unknown in this document.)*
+2. **Can predicate authority be preserved?** Resume by evaluating predicates first and then
+   `ForkWorkflow`-ing to the first unsatisfied step. Does that compose, or does it mean we are running our own
+   resume anyway?
+3. **Can per-run isolation work?** One DBOS context and one SQLite file per run workspace, several runs
+   concurrently, each recovering independently (F6).
+
+If all three come back clean, adopt DBOS and delete primitives 2, 7 and the cooperative half of 8 from the
+list above — a real saving of roughly 900-1500 lines. **Reversing to DBOS later is cheap; reversing away from
+it is not**, which is the asymmetry that puts the spike before the journal store rather than after it.
+
+Rejected alternatives, briefly: **Temporal** (F1, plus a non-production dev server and an Activity model that
+demands worst-case duration estimates and heartbeat plumbing for an open-ended agent run); **Restate** (F1 by
+control inversion — a server that calls us over HTTP, no library mode, telemetry on by default);
+**go-workflows** (passes F1 and F2, but one maintainer, undocumented timer/retry/cancellation surface, and
+Go-only, so adopting it decides #5 by side effect — retain as the Go fallback); **durabletask-go** (roadmap now
+serves Dapr's sidecar model; F1 fails outside Go); **Resonate** (pre-1.0, Python `>=3.12`, no Go SDK);
+**DAG engines** (F1 and F2); **task queues** (no workflow-level resume).
+
+### Consequences
+
+What would make us revisit: the spike above coming back clean; a second operator or a remote worker appearing
+(which would reopen F1 and make Temporal's cost make sense); or the journal store exceeding its estimate by
+more than half, which would be evidence the estimate was wrong rather than the decision.
 
 ## What we lose
 
-TBD
+Stated plainly, because the recommendation is the one that loses the most.
+
+1. **Battle-testing.** DBOS's SQLite journal has had five months of other people's crashes. Ours will have
+   none. No LOC comparison captures that, and it is the strongest single argument against this
+   recommendation.
+2. **An ecosystem.** No web UI, no `temporal workflow list`, no third-party observability integrations. The
+   operator inspection surface (map, Not yet specified) becomes entirely ours, and it is the kind of work that
+   gets deferred forever.
+3. **Queues and flow control for free.** DBOS queues with concurrency limits map closely onto F8. We are
+   writing an admission gate instead.
+4. **A reviewed concurrency model.** `modernc.org/sqlite` plus DBOS's polling loop is a combination its authors
+   have tested under load. Our single-writer discipline will be ours to prove.
+5. **Debouncing, scheduled workflows, workflow fork, programmatic management.** DBOS ships all of these. We
+   will want at least `fork` eventually — resuming a run from an earlier step is an obvious operator request —
+   and we will write it ourselves.
+6. **The reviewed-dependency argument.** "We wrote our own durable execution core" is a sentence that invites
+   scepticism, and it should. The defence is the scope list, not the sentiment: ten named primitives, and the
+   spike that tried to avoid writing them.
+
+And what we lose by *not* going further: the distributed and remote-worker path is explicitly out of scope
+(map, Out of scope), but a custom core makes that reversal more expensive than an engine would — the point at
+which a second machine appears is the point at which this decision should be reconsidered rather than patched.
+
+## Per-language availability
+
+Feeds [#5](https://github.com/Teagan42/aLLMchemy/issues/5). The verdict is that **orchestration does not
+constrain the language choice**, and specifically does not restore the Python advantage that #3 found had
+evaporated.
+
+| Language | Server-backed | Library-mode, daemon-free | Verdict |
+|---|---|---|---|
+| **Go** | Temporal, Restate | **DBOS Transact (SQLite, cgo-free)**, go-workflows (SQLite), durabletask-go (SQLite) | **Best-served.** Three daemon-free options, and the only language with a *choice* of them. Static single binary preserved in every case. |
+| **Python** | Temporal, Restate | **DBOS Transact (SQLite is the default)**, Resonate (pre-1.0) | Well-served, by one mature option. Also the only language with first-party agent-framework prior art to read. |
+| **TypeScript** | Temporal, Restate, Inngest, Trigger.dev | DBOS Transact | Adequate; nothing here argues for it. |
+| **Rust** | Restate | none found | **Worst-served.** No library-mode durable execution located. **Unverified** — absence of evidence, searched but not exhaustively. |
+
+Two notes that matter for #5:
+
+- **Go is now at least as well-served as Python for orchestration, and arguably better.** The daemon-free
+  option count is 3 to 2, and only Go's gets a single static binary with no runtime to install on the
+  operator's machine. Combined with #3's finding that Python's SDK advantage does not survive contact with
+  Codex, nothing in orchestration argues for Python.
+- Because the recommendation is custom, this table is a tiebreaker rather than a constraint. Its real use is
+  the *fallback* ranking: if the DBOS spike succeeds, Go and Python are both viable; if the spike succeeds and
+  the language is Go, go-workflows is a second fallback that Python does not have.
