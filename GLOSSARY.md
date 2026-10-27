@@ -153,6 +153,27 @@ The set of tools a role is permitted, declared on its manifest. It says what is 
 **Egress profile**:
 The network a role may reach, declared per role. A build role needs registries and documentation; an acquisition step needs the open web, and that breadth is recorded rather than ambient.
 
+**Provider**:
+An external service the foundry uses on an operator's behalf. Interchangeable within its class.
+
+**Provider class**:
+A kind of provider — hosting, database, billing, DNS and so on. Operations differ per class; only validation, capability declaration, teardown and cost reporting are common to all.
+
+**Adapter**:
+The code that makes one provider usable. It declares what that provider can do, validates its credentials, performs its class's operations, and knows how to reverse them.
+
+**Ledger entry**:
+A resource's identity in the foundry's own terms. Destructive operations name one of these rather than a provider's identifier, so a run cannot be asked to destroy something it did not create.
+
+**Teardown descriptor**:
+The recorded means of reversing one resource, written when the resource is created rather than recalled afterwards.
+
+**Dependency edge**:
+A recorded "this resource contains that one", stated by the adapter at creation. Teardown walks these in reverse; a cycle is an error.
+
+**Usage ceiling**:
+What bounds a resource's metered cost, drawn from a closed set of possibilities. It is reported, not enforced — no spending limit stands behind it.
+
 **Provisioned resource**:
 Something external a run brought into existence. Each one is recorded as it is created, costed, and reversible by a recorded command.
 
