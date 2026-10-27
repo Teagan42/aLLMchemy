@@ -75,7 +75,7 @@ jobs:
       # Only authenticate when something will actually be pushed. A PR from a fork has no
       # package-write token, and logging in would fail before the build that still has value.
       - if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
