@@ -136,6 +136,10 @@ indicative sentence.
 
 ## DECISIONS.md
 
+Lives in the **product's** repository at `$FACTORY_PROJECT_DIR/DECISIONS.md`, not in the
+package. The factory and the product it builds keep separate audit trails; the package's own
+decisions are ADRs in its `docs/adr/`.
+
 Append-only. One row per resolved unknown. Written as you go, not reconstructed at the end.
 
 ```markdown

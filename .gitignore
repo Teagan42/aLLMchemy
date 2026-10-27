@@ -11,3 +11,8 @@ artifacts/
 # Its trap removes it, but a trap cannot run on SIGKILL, so this is the belt to that brace:
 # a crashed test run must never leave a live-shaped key that `git add -A` would commit.
 devtest-planted-secret-*
+
+# Products are built outside this repo and are their own repositories. This is the belt to
+# that brace: bin/run-factory.sh refuses an in-tree product dir, and if one ever appears
+# anyway it must not be committable into the factory's history.
+projects/

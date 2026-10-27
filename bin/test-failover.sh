@@ -32,6 +32,10 @@ printf '%s\n' "$i" > "$FAKE_DIR/calls"
 printf '%s\n' "$@" > "$FAKE_DIR/argv.$i"
 printf 'ANTHROPIC_MODEL=%s\nANTHROPIC_BASE_URL=%s\nAWS_PROFILE=%s\n' \
   "${ANTHROPIC_MODEL:-}" "${ANTHROPIC_BASE_URL:-}" "${AWS_PROFILE:-}" > "$FAKE_DIR/env.$i"
+# A real run leaves a product behind; the isolation gate checks for one. Build a token
+# file so these cases exercise the gate's pass path rather than its failure path.
+[ -n "${FACTORY_PROJECT_DIR:-}" ] && [ "${FAKE_BUILD:-1}" = 1 ] \
+  && printf 'scaffold\n' > "$FACTORY_PROJECT_DIR/src.txt" 2>/dev/null
 outcome=$(awk -v n="$i" 'NR == n { print }' "$FAKE_SCRIPT")
 [ -n "$outcome" ] || outcome=ok
 case "$outcome" in
@@ -283,6 +287,36 @@ ck "exit status"                      "$SRC" 0
 ck "never retried"                    "$(calls)" 1
 ck "no failover recorded"             "$(drows)" 0
 ck "final message survived NDJSON"    "$(yn "$T/out" 'run complete')" yes
+
+echo; echo "The product is built outside the package, in its own repository:"
+new_case 'ok'
+run_sup
+ck "product dir got a git repo"       "$(exists "$T/work/.git")" yes
+ck "gitignore covers .env before any commit" "$(yn "$T/work/.gitignore" '.env*')" yes
+ck "product keeps its own docs/adr"   "$(exists "$T/work/docs/adr")" yes
+# Written only on a failover; the failover cases above assert it lands in the product.
+ck "no DECISIONS without a failover" "$(exists "$T/work/DECISIONS.md")" no
+ck "harness could write to the product" "$(yn "$T/fake/argv.1" '--add-dir')" yes
+ck "the product dir reached the harness" "$(yn "$T/fake/argv.1" "$T/work")" yes
+# cwd must stay the package, or the permission denials, the Stop hooks, the role subagents
+# and the skills all silently stop loading.
+ck "cwd stayed the package"           "$(yn "$T/out" 'product:')" yes
+
+echo; echo "A product directory inside the package is refused, not quietly used:"
+new_case 'ok'
+env -i PATH="$T/bin:$PATH" HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" \
+  FAKE_DIR="$T/fake" FAKE_SCRIPT="$T/script" GATEWAY_DIR="$T/gw" \
+  FACTORY_WORKDIR="$(pwd)/artifacts/would-be-committed" \
+  ./bin/run-factory.sh > "$T/inside" 2>&1
+ck "exit status"                      "$?" 1
+ck "names the reason"                 "$(yn "$T/inside" 'inside the package')" yes
+ck "harness never ran"                "$(calls)" 0
+
+echo; echo "A run that builds nothing fails instead of reporting success:"
+new_case 'ok'
+run_sup FAKE_BUILD=0
+ck "exit status"                      "$SRC" 1
+ck "names the empty product"          "$(yn "$T/out" 'nothing but the seeded scaffolding')" yes
 
 [ -n "$T" ] && rm -rf "$T"
 echo; [ "$fails" -eq 0 ] && echo "all pass" || echo "$fails failing"

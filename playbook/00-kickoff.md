@@ -98,7 +98,14 @@ Done means all of this is true, verified by execution and not by assertion:
 Work in phases. Do not start a phase before its predecessor's gate passes. Record each
 gate result in `DECISIONS.md`.
 
-**Phase 0 — Intake.** Run `node bin/validate-intake.mjs` first. It validates `intake.yaml`
+**Phase 0 — Where you are, then intake.** The product root is an absolute path given in your
+kickoff prompt and in `FACTORY_PROJECT_DIR`. It already exists, is its own git repository, and
+already has a `.gitignore` covering `.env*`. Every file you create goes there. Your working
+directory is the package and must stay that way — the role subagents, the skills and the
+no-questions guard are scoped to it — so use absolute paths for everything you write. Record
+the product's own decisions in its `DECISIONS.md` and its `docs/adr/`, never in the package.
+
+**Phase 0b — Intake.** Run `node bin/validate-intake.mjs` first. It validates `intake.yaml`
 against `intake.schema.json` and prints the resolved values with defaults applied; a
 non-zero exit means an out-of-range number, a bad enum, or a misspelled key, and continuing
 past one designs the product to a ceiling or a consent rule the operator never asked for.

@@ -232,6 +232,16 @@ feature change.
   tables in `dev/port-rules.txt` and `dev/make-rules.txt`. Add a construct to the table in the
   same commit that bans it.
 
+## Architecture decisions
+
+The package's own decisions live in `docs/adr/`, one file per decision, numbered and
+immutable once merged. `docs/adr/README.md` carries the template and the rule for when to
+write one.
+
+A *run*'s decisions are not these. Those go in the product's own `DECISIONS.md` and the
+product's own `docs/adr/`, because they belong to the product's repository. The factory and
+the thing it builds keep separate audit trails.
+
 ## Atomic commits
 
 One logical change per commit.
