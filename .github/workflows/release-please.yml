@@ -30,7 +30,7 @@ jobs:
       # Also: a PR opened by GITHUB_TOKEN does not trigger other workflows, so `ci` does not
       # run on the release PR itself. The commits it contains were already checked on their
       # own PRs; re-verification happens in `release-assets` before anything is published.
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
