@@ -260,9 +260,18 @@ multi-commit branch, which is almost never a conventional subject:
 gh pr create --base main --title "feat(run): short conventional subject" --body-file -
 ```
 
-`main` is protected by convention here, not by policy, until branch protection is enabled on
-the repository. Until then the rule is only as strong as this document — so follow it even
-when a direct push would work.
+`main` is enforced by a GitHub ruleset, not by convention: a direct push is rejected with
+"Changes must be made through a pull request". Merges are squash-only, the PR title becomes
+the commit subject, and the branch is deleted on merge.
+
+Three checks are required — `conventional`, `check (ubuntu-latest)` and
+`check (macos-latest)`. `build` and `detect` deliberately are not: `build` skips whenever
+there is no Dockerfile, and a required check that never runs blocks every PR forever.
+
+The repository-admin bypass is scoped to `pull_request`, not `always`. An admin can therefore
+merge a PR that is missing a required check — which `release-please`'s own release PR always
+is, because a PR opened by `GITHUB_TOKEN` triggers no workflows — while still being unable to
+push to `main` directly.
 
 ## Architecture decisions
 
