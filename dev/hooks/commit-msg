@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Rejects a commit message that is not Conventional Commits. Install with `make hooks`.
+#
+# Fast and local, because the alternative is finding out in CI after a push, and because
+# release-please reads these messages: a wrong type ships the change with no release rather
+# than failing loudly. The same validator runs in CI, so the rule cannot drift.
+#
+# Bypassable with --no-verify. Amending the subject afterwards is `git commit --amend`.
+
+set -uo pipefail
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$ROOT" || exit 1
+
+# Fail open on a missing validator: a hook that blocks on its own absence is worse than the
+# rule it enforces, and CI still catches the message.
+[ -x ./dev/check-commits.sh ] || exit 0
+
+if ! ./dev/check-commits.sh --message "$1"; then
+  printf '\ncommit-msg FAILED. The message above was not written.\n' >&2
+  printf 'Edit and retry, or bypass with: git commit --no-verify\n' >&2
+  exit 1
+fi
+exit 0

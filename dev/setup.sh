@@ -188,36 +188,40 @@ for pat in 'artifacts/' '.env*'; do
   fi
 done
 
-printf '\nGit hook\n'
+printf '\nGit hooks\n'
 
 hookdir=$(git rev-parse --git-path hooks 2>/dev/null)
-src="$ROOT/dev/hooks/pre-commit"
+# Two hooks, one loop: pre-commit gates the tree, commit-msg gates the message. Installing
+# only one leaves half the contract enforced by CI alone, which is after the push.
+for hook in pre-commit commit-msg; do
+src="$ROOT/dev/hooks/$hook"
 if [ -z "$hookdir" ]; then
-  printf '  SKIP    %-14s %-18s %s\n' 'pre-commit' 'not a git repo' 'nothing to install into'
+  printf '  SKIP    %-14s %-18s %s\n' "$hook" 'not a git repo' 'nothing to install into'
 elif [ "$install_hooks" -eq 0 ]; then
   # Never silent. A hook that appears in someone's clone without being asked for is a
   # surprise 20-second delay on every commit, and the first guess is that git is broken.
-  if [ -e "$hookdir/pre-commit" ]; then
-    printf '  OK      %-14s %-18s %s\n' 'pre-commit' 'installed' "$hookdir/pre-commit"
+  if [ -e "$hookdir/$hook" ]; then
+    printf '  OK      %-14s %-18s %s\n' "$hook" 'installed' "$hookdir/$hook"
   else
-    printf '  OFFER   %-14s %-18s %s\n' 'pre-commit' 'not installed' 'install with: make hooks'
+    printf '  OFFER   %-14s %-18s %s\n' "$hook" 'not installed' 'install with: make hooks'
   fi
 else
   mkdir -p "$hookdir" 2>/dev/null
-  if [ -e "$hookdir/pre-commit" ] && [ ! -L "$hookdir/pre-commit" ] && [ "$force" -eq 0 ]; then
-    printf '  WARN    %-14s %-18s %s\n' 'pre-commit' 'exists' 'a real file is already there; re-run with --force'
+  if [ -e "$hookdir/$hook" ] && [ ! -L "$hookdir/$hook" ] && [ "$force" -eq 0 ]; then
+    printf '  WARN    %-14s %-18s %s\n' "$hook" 'exists' 'a real file is already there; re-run with --force'
     warns=$((warns + 1))
   else
-    # Absolute symlink, so the hook tracks edits to dev/hooks/pre-commit and works from a
-    # linked worktree, where .git is a file and a relative link would dangle.
-    if ln -sf "$src" "$hookdir/pre-commit" 2>/dev/null; then
-      printf '  OK      %-14s %-18s %s\n' 'pre-commit' 'installed' "$hookdir/pre-commit -> $src"
+    # Absolute symlink, so the hook tracks edits to dev/hooks/ and works from a linked
+    # worktree, where .git is a file and a relative link would dangle.
+    if ln -sf "$src" "$hookdir/$hook" 2>/dev/null; then
+      printf '  OK      %-14s %-18s %s\n' "$hook" 'installed' "$hookdir/$hook -> $src"
     else
-      printf '  WARN    %-14s %-18s %s\n' 'pre-commit' 'failed' "cannot write $hookdir"
+      printf '  WARN    %-14s %-18s %s\n' "$hook" 'failed' "cannot write $hookdir"
       warns=$((warns + 1))
     fi
   fi
 fi
+done
 
 printf '\n'
 if [ "$missing" -gt 0 ]; then
