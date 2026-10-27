@@ -1,6 +1,6 @@
-# Autonomous Micro-SaaS Factory
+# aLLMchemy : Autonomous Micro-SaaS Factory
 
-A handoff package. One human fills one questionnaire. An agent then invents a $5/month
+A handoff package. One human fills one questionnaire. An agent then devises, designs a
 product, builds it, deploys it to a public URL, wires it to the billing provider (test mode
 by default, live with `go_live: true`), tests it against that URL, and hands back a running
 business. The agent never asks a question.
