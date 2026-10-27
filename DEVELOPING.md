@@ -253,6 +253,13 @@ The branch name is not load-bearing; the **PR title** is. A squash merge takes t
 the commit subject, so the title is what `release-please` reads to decide the next version.
 `dev/check-commits.sh --title "<your title>"` checks it before CI does.
 
+Pass the title explicitly. `gh pr create --fill` takes the title from the **branch name** on a
+multi-commit branch, which is almost never a conventional subject:
+
+```sh
+gh pr create --base main --title "feat(run): short conventional subject" --body-file -
+```
+
 `main` is protected by convention here, not by policy, until branch protection is enabled on
 the repository. Until then the rule is only as strong as this document — so follow it even
 when a direct push would work.
