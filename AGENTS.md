@@ -161,11 +161,18 @@ jobs. These are run-mode only.
 
 ## Artifacts to produce
 
-In the generated product repo: `CAPABILITIES.md`, `PRODUCT-SPEC.md`, `DECISIONS.md`,
-`PROVISIONED.md`, `HANDOFF.md`, `RUNBOOK.md`, `verify.sh`, `teardown.sh`.
+Everything a run produces belongs to the **product's** repository, never to this package.
+The product root is an absolute path, given to you in the kickoff prompt and in
+`FACTORY_PROJECT_DIR`; `bin/run-factory.sh` creates it outside this repo, one directory per
+product, and `git init`s it.
 
-`CAPABILITIES.md` is Phase 1's only deliverable and the contract every later phase reads.
-Nothing downstream may assume a capability absent from it.
+In the product repo: `PRODUCT-SPEC.md`, `DECISIONS.md`, `HANDOFF.md`, `RUNBOOK.md`,
+`PROVISIONED.md`, `verify.sh`, `docs/adr/`, and the application itself.
 
-`HANDOFF.md`'s first line states the achieved outcome tier — L, T, or D, defined in
-`playbook/00-kickoff.md`. Without it, nobody can tell a launch from a local container.
+Your working directory is this package and stays that way, because the role subagents, the
+skills, the permission denials and the no-questions hooks are all scoped to it. Treat the
+package as read-only: it is the playbook you follow, not the repository you build in. The
+run fails if files appear in this tree, and it fails if the product directory is empty —
+both are checked after the run, not assumed.
+
+This package keeps its own decisions in `docs/adr/`. They are not a run's decisions.

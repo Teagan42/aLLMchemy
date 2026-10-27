@@ -20,11 +20,53 @@
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd) || exit 1
-# The run builds the product in WORK; the package's own tooling stays under ROOT. They are
-# the same directory in a real run and differ only under bin/test-failover.sh.
-WORK="${FACTORY_WORKDIR:-$ROOT}"
-mkdir -p "$WORK/artifacts" || exit 1
-cd "$WORK" || exit 1
+
+# The product is a separate deliverable with its own git history, so it is built OUTSIDE
+# this repo and one factory serves many products. aLLMchemy records its own decisions in
+# docs/adr/; each product records its own in its own tree.
+#
+# cwd stays ROOT deliberately. The Claude Code adapter — the permission denials, the
+# no-questions Stop hooks, the seven role subagents, the six skill pointers — is all scoped
+# to the project directory. Running from the product directory would silently disarm every
+# one of them, and a run with no question guard is the permanent hang this package exists to
+# prevent. The product is reached by absolute path instead, and a post-run check proves
+# nothing landed in the wrong tree.
+PROJECTS_DIR="${FACTORY_PROJECTS_DIR:-$(cd "$ROOT/.." && pwd)/projects}"
+PROJECT="${FACTORY_PROJECT:-run-$(date -u +%Y%m%dT%H%M%SZ)}"
+# FACTORY_WORKDIR stays the explicit override; bin/test-failover.sh drives it.
+PROJECT_DIR="${FACTORY_WORKDIR:-$PROJECTS_DIR/$PROJECT}"
+
+# A product inside the package would be committed to the package's history, which is the
+# one outcome this layout exists to prevent.
+case "$PROJECT_DIR/" in
+  "$ROOT/"*)
+    printf 'run-factory: FAIL the product directory is inside the package:\n  %s\n' "$PROJECT_DIR" >&2
+    printf '  The product is its own repository. Point FACTORY_PROJECTS_DIR outside\n' >&2
+    printf '  %s, or leave it unset to use %s.\n' "$ROOT" "$PROJECTS_DIR" >&2
+    exit 1 ;;
+esac
+
+mkdir -p "$PROJECT_DIR/artifacts" "$PROJECT_DIR/docs/adr" || exit 1
+# .gitignore before the first commit, not after: the only moment it prevents a leak rather
+# than documenting one. playbook/autonomy-contract.md requires it in the first commit.
+[ -f "$PROJECT_DIR/.gitignore" ] || printf '.env*\n!.env.example\nartifacts/\nnode_modules/\n' > "$PROJECT_DIR/.gitignore"
+if [ ! -d "$PROJECT_DIR/.git" ] && [ "${FACTORY_GIT_INIT:-1}" = 1 ]; then
+  git -C "$PROJECT_DIR" init -q -b main 2>/dev/null || :
+fi
+
+# WORK is the audit root: DECISIONS.md, HANDOFF.md and artifacts/ belong to the product,
+# not to the factory that built it.
+WORK="$PROJECT_DIR"
+cd "$ROOT" || exit 1
+
+# The agent is told to write only to the product. Trust is not evidence, so snapshot the
+# package tree now and diff it at the end: anything new in here came from the run and
+# belongs in the product instead.
+PKG_BEFORE=$(git -C "$ROOT" status --porcelain 2>/dev/null | sort)
+
+# Exported so every harness — Claude Code via the prompt, a pluggable launcher via its
+# environment — learns where the product lives without parsing argv for --add-dir.
+export FACTORY_PROJECT_DIR="$PROJECT_DIR"
 
 DETECT="$ROOT/bin/detect-question.sh"
 GATEWAY_DIR="${GATEWAY_DIR:-$ROOT/gateway}"
@@ -151,6 +193,8 @@ next_tier() {
 
 # ---------------------------------------------------------------- prompts
 
+# Static text in a quoted heredoc; the paths appended after. An unquoted heredoc inside
+# $( ) mis-parses an apostrophe on bash 3.2, which is the portability floor.
 KICKOFF=$(cat <<'EOF'
 Read AGENTS.md, then playbook/00-kickoff.md, and execute the run described there.
 No human is available. Never ask a question; resolve every unknown with the decision
@@ -158,9 +202,25 @@ ladder in playbook/autonomy-contract.md and record it in DECISIONS.md.
 EOF
 )
 
+KICKOFF="$KICKOFF
+
+The product you are building lives at:
+
+    $PROJECT_DIR
+
+That directory is its own git repository and is the ONLY place you may write. Every file
+you create belongs there: the scaffold, the source, verify.sh, PRODUCT-SPEC.md,
+DECISIONS.md, HANDOFF.md, RUNBOOK.md, and its own docs/adr/ entries. Use absolute paths.
+
+Your working directory is this package, $ROOT, because the role subagents, the skills and
+the no-questions guard are all scoped to it. Treat the package as READ-ONLY: it is the
+playbook you follow, never the repository you build in. A product committed to the
+package history is a failure, and one factory serves many products."
+
 CONTINUE_NOTE=$(cat <<'EOF'
-Prior work from this run is already in the repo. Read DECISIONS.md and HANDOFF.md first and
-continue from the phase they leave off at. Do not restart the run or redo finished phases.
+Prior work from this run is already in the product repository. Read its DECISIONS.md and
+HANDOFF.md first and continue from the phase they leave off at. Do not restart the run or
+redo finished phases.
 EOF
 )
 
@@ -316,6 +376,9 @@ run_claude() {  # model, prompt, resume(0|1)
   model=$1
   resuming=$3
   set -- -p "$2" --output-format stream-json --verbose
+  # cwd is the package, so the product directory is outside the session's writable set.
+  # Without this every write to the product is refused and the run builds nothing.
+  set -- --add-dir "$PROJECT_DIR" "$@"
   [ "$resuming" = 1 ] && set -- --continue "$@"
   [ -n "$model" ] && set -- --model "$model" "$@"
   spawn_watched _exec_claude "$model" "$@"
@@ -587,6 +650,31 @@ if [ -z "$CHAIN" ]; then
   exit 1
 fi
 
+# Proves the run wrote where it was told to. Both directions are failures, and both are
+# silent without this: files in the package would be committed to the factory's history,
+# and an empty product means the run reported success having built nothing.
+check_project_isolation() {
+  ci_rc=0
+  pkg_after=$(git -C "$ROOT" status --porcelain 2>/dev/null | sort)
+  leaked=$(printf '%s\n' "$pkg_after" | comm -13 <(printf '%s\n' "$PKG_BEFORE") - 2>/dev/null)
+  if [ -n "${leaked//[[:space:]]/}" ]; then
+    warn "the run wrote into the package instead of the product:"
+    printf '%s\n' "$leaked" | sed 's/^/    /' >&2
+    printf '  These belong under %s. The package is read-only during a run.\n' "$PROJECT_DIR" >&2
+    ci_rc=1
+  fi
+  # Ignores everything this script and the supervisor seed — scaffolding, and the audit
+  # files the supervisor writes itself. Counting those would let "built nothing" pass.
+  built=$(find "$PROJECT_DIR" -mindepth 1 -maxdepth 1 \
+            ! -name artifacts ! -name docs ! -name .git ! -name .gitignore \
+            ! -name DECISIONS.md ! -name HANDOFF.md 2>/dev/null | head -1)
+  if [ -z "$built" ]; then
+    warn "the product directory holds nothing but the seeded scaffolding: $PROJECT_DIR"
+    ci_rc=1
+  fi
+  return "$ci_rc"
+}
+
 set -- $CHAIN
 TIER_COUNT=$#
 say "tier chain: $CHAIN"
@@ -601,7 +689,12 @@ for tier in $CHAIN; do
     case $? in
       0)
         [ "$RUNG" -gt 1 ] && record_model_tier "$tier" "$RUNG"
-        exit 0
+        if check_project_isolation; then
+          say "product: $PROJECT_DIR"
+          exit 0
+        fi
+        warn "run finished but wrote to the wrong tree; see above"
+        exit 1
         ;;
       2)
         warn "tier $tier returned a policy/safety refusal ($CAUSE); stopping without failover"

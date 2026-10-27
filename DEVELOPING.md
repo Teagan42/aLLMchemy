@@ -232,6 +232,48 @@ feature change.
   tables in `dev/port-rules.txt` and `dev/make-rules.txt`. Add a construct to the table in the
   same commit that bans it.
 
+## Branch, then PR
+
+Never commit to `main`. Every change — feature, fix, docs, chore — starts on a branch cut
+from the **latest** `origin/main` and lands through a pull request.
+
+```sh
+git fetch origin
+git switch -c feat/short-slug origin/main    # not from your stale local main
+...work, commit on green...
+git push -u origin HEAD
+gh pr create --fill                          # title must be a conventional subject
+```
+
+Branch from `origin/main`, not from local `main`: a branch cut from a stale local ref carries
+commits that are already merged, and the `commits` workflow then validates a range that is
+not what you changed.
+
+The branch name is not load-bearing; the **PR title** is. A squash merge takes the title as
+the commit subject, so the title is what `release-please` reads to decide the next version.
+`dev/check-commits.sh --title "<your title>"` checks it before CI does.
+
+Pass the title explicitly. `gh pr create --fill` takes the title from the **branch name** on a
+multi-commit branch, which is almost never a conventional subject:
+
+```sh
+gh pr create --base main --title "feat(run): short conventional subject" --body-file -
+```
+
+`main` is protected by convention here, not by policy, until branch protection is enabled on
+the repository. Until then the rule is only as strong as this document — so follow it even
+when a direct push would work.
+
+## Architecture decisions
+
+The package's own decisions live in `docs/adr/`, one file per decision, numbered and
+immutable once merged. `docs/adr/README.md` carries the template and the rule for when to
+write one.
+
+A *run*'s decisions are not these. Those go in the product's own `DECISIONS.md` and the
+product's own `docs/adr/`, because they belong to the product's repository. The factory and
+the thing it builds keep separate audit trails.
+
 ## Atomic commits
 
 One logical change per commit.
