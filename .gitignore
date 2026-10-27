@@ -6,3 +6,8 @@
 # Run output: verify.sh artifacts and launcher transcripts. intake.yaml is deliberately
 # absent here — QUESTIONNAIRE.md commits it and keeps only the credentials file out.
 artifacts/
+
+# dev/test.sh's `secrets` suite plants a fake live Stripe key to prove the scanner fires.
+# Its trap removes it, but a trap cannot run on SIGKILL, so this is the belt to that brace:
+# a crashed test run must never leave a live-shaped key that `git add -A` would commit.
+devtest-planted-secret-*

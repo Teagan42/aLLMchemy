@@ -1,0 +1,19 @@
+# Portability rules for shell and .mjs sources. One per line: ERE, '@', reason.
+# '@' appears in no pattern and no reason, which is why it is the delimiter — every other
+# separator shows up inside an ERE.
+#
+# A data file, not a heredoc inside dev/lint.sh. While the table lived in the linter, the
+# linter had to exempt itself from its own scan or self-report, and that exemption made it
+# the one file in the tree where a GNU-ism was never caught.
+#
+# Blank lines and # comments ignored. Comments are stripped from each scanned file first,
+# because the repo documents every banned construct in a comment explaining the ban.
+
+mapfile@bash 3.2 has no mapfile; use `while IFS= read -r`
+declare -A@bash 3.2 has no associative arrays; use a delimited string or a temp file
+sed -r@BSD sed has no -r; use sed -E
+grep -P@BSD grep has no -P; use grep -E
+readlink -f@BSD readlink has no -f; use `CDPATH='' cd -- "$(dirname -- "$0")" && pwd`
+date -d@BSD date has no -d; compute with arithmetic or date -r
+\$\{[A-Za-z_][A-Za-z0-9_]*(\^\^|,,)@bash 4 case conversion; use tr '[:lower:]' '[:upper:]'
+(^|[^[:alnum:]_./$-])timeout @macOS ships no timeout binary; background the job and poll

@@ -19,6 +19,9 @@
 #
 # Fails closed on "not a question" (exit 1) if anything is missing, so a broken detector
 # never blocks a run. The policy layer, not this script, is the real guarantee.
+#
+# Exit 2 means the pattern file is malformed. That is not "clean": an unreadable rule used
+# to abort grep mid-list and leave the remaining rules unevaluated, silently.
 
 set -uo pipefail
 
@@ -50,6 +53,13 @@ text=$(awk '
 # Redirect, not a pipe: a piped `while` runs in a subshell where `exit` cannot escape.
 while IFS= read -r re; do
   case "$re" in ''|\#*) continue ;; esac
+  # grep exits 2 on a bad ERE. Probing against /dev/null separates "no match" (1) from
+  # "unparseable rule" (2), which otherwise reads as a clean message.
+  grep -E -e "$re" /dev/null 2>/dev/null
+  [ $? -le 1 ] || {
+    printf 'detect-question: malformed pattern in %s: %s\n' "$patterns" "$re" >&2
+    exit 2
+  }
   if printf '%s' "$text" | grep -Eqi -- "$re"; then
     [ -n "${DETECT_VERBOSE:-}" ] && printf 'matched: %s\n' "$re" >&2
     exit 0

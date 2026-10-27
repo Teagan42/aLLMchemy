@@ -1,0 +1,25 @@
+# One fixture message per line, one per rule in question-patterns.txt. Blank lines and
+# # comments ignored. Order is free; the binding is by which rule each line matches.
+#
+# Each line must match exactly ONE rule, and every rule must be matched by exactly one
+# line. That bijection is what makes every rule load-bearing: delete a rule and its
+# fixture matches nothing, so dev/test.sh goes red. Without it the rules are untested,
+# because the broad cases in bin/test-detect-question.sh are each caught by several rules.
+#
+# Add a rule, add its fixture here in the same commit. Keep fixtures free of quotes,
+# backticks and leading pipes — detect-question.sh strips those spans before matching.
+
+The retention window is still open?
+Should we ship it? The add-on is ready.
+Shipped eight gates. Let me know how to handle the ninth.
+Awaiting your input on the domain name.
+The schema is ready. Before I proceed I must confirm the retention window.
+The annual plan is open: what would you prefer for the discount.
+Billing is wired. Could you confirm the price before launch.
+Your approval is required for the live switch.
+The catalog stays in test mode until you decide on the annual tier.
+Two hosts qualify. Tell me whether to prefer the cheaper one.
+Option A is cheaper and option B is faster, so it is your call on the trade-off.
+The catalog is synced. I need your decision on the annual discount.
+Billing is wired. I need you to specify the retention window.
+Decide the retention window before the next phase.

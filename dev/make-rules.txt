@@ -1,0 +1,19 @@
+# Portability rules for the Makefile only. Same ERE '@' reason format as port-rules.txt.
+#
+# The Makefile header claims the intersection of GNU make and BSD make. No BSD make is
+# installed on the reference machine and both CI runners are GNU, so the claim is only as
+# true as this table: adding $(shell …) or an ifeq block used to pass every gate.
+#
+# These are the GNU-only constructs this Makefile would plausibly reach for. It is a floor,
+# not a conformance suite — if a real BSD make ever becomes available, run it instead.
+
+\$\(shell@GNU-only function; BSD make has no $(shell). Put the command in the recipe
+\$\(wildcard@GNU-only function; expand the glob in the recipe shell instead
+\$\(patsubst@GNU-only function; use a recipe-level sed
+^ *ifeq@GNU-only conditional; BSD make spells it .if. Branch in the recipe shell
+^ *ifneq@GNU-only conditional; BSD make spells it .if. Branch in the recipe shell
+^ *ifdef@GNU-only conditional; BSD make spells it .ifdef. Branch in the recipe shell
+\.ONESHELL@GNU-only special target; write one shell line, or chain with &&
+\.DEFAULT_GOAL@GNU-only; BSD make takes the first target, so keep `help` first
+^%.*:@GNU-only pattern rule; BSD make needs a suffix rule. Name the targets
+^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*[A-Za-z0-9_]*[[:space:]]*=@target-specific variable is GNU-only; pass it through ARGS

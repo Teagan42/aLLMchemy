@@ -1,0 +1,23 @@
+# Shared whitespace rules. Deliberately modest: this repo has no formatter and must not
+# acquire one (shfmt is absent on the reference machine, and there is no install step).
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{sh,mjs,js,json,yaml,yml}]
+indent_style = space
+indent_size = 2
+
+# Two trailing spaces are a hard line break in Markdown. Trimming them silently reflows
+# the questionnaire and the playbook.
+[*.md]
+trim_trailing_whitespace = false
+
+# make requires a literal tab to start a recipe line.
+[Makefile]
+indent_style = tab

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Pre-commit gate: dev/lint.sh, then dev/test.sh --quick. Install with `make hooks`.
+#
+# --quick, not the full suite, because a hook slower than about ten seconds gets bypassed
+# every time and then removed. The failover suite is the one that is skipped here; `make test`
+# before pushing covers it.
+#
+# Checks the WORKING TREE, not the index. A partially staged commit can therefore pass here
+# and still be broken at HEAD. Stage whole files, or run `make check` after committing. This
+# hook is a fast tripwire, never the gate: `make check` is the gate.
+
+set -uo pipefail
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  printf 'pre-commit: not in a git work tree, nothing to check\n' >&2
+  exit 0
+}
+cd "$ROOT" || exit 1
+
+bypass() { printf '\nBypass with: git commit --no-verify   (then fix it before pushing)\n' >&2; }
+
+printf 'pre-commit: dev/lint.sh\n'
+if ! ./dev/lint.sh; then
+  printf '\npre-commit FAILED at lint. See the FAIL lines above.\n' >&2
+  bypass
+  exit 1
+fi
+
+printf '\npre-commit: dev/test.sh --quick\n'
+if ! ./dev/test.sh --quick; then
+  printf '\npre-commit FAILED at tests. See the summary table above.\n' >&2
+  bypass
+  exit 1
+fi
+
+# Never stages and never formats. A hook that rewrites files commits something the author
+# did not read.
+printf '\npre-commit OK — lint clean, quick suites pass. Nothing was staged or reformatted.\n'
+printf 'This checked the working tree and skipped the failover suite. Run `make check` before you push.\n'
+exit 0

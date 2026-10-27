@@ -5,6 +5,7 @@
 //
 //   node bin/validate-intake.mjs [intake.yaml]        exit 0 valid, 1 invalid, 2 unreadable
 //   node bin/validate-intake.mjs --json               resolved values as JSON on stdout
+//   node bin/validate-intake.mjs --check-docs         seam 12: schema <-> questionnaire <-> example
 //
 // Node ESM, zero dependencies, same no-install rule as template/billing-core. A missing
 // intake file is valid: every property has a default and an empty submission is legal.
@@ -14,8 +15,10 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const args = process.argv.slice(2).filter((a) => a !== '--json');
+const FLAGS = ['--json', '--check-docs'];
+const args = process.argv.slice(2).filter((a) => !FLAGS.includes(a));
 const asJson = process.argv.includes('--json');
+const checkDocs = process.argv.includes('--check-docs');
 const intakePath = resolve(args[0] ?? resolve(HERE, '..', 'intake.yaml'));
 const schemaPath = resolve(HERE, '..', 'intake.schema.json');
 
@@ -110,6 +113,39 @@ export function validate(values, schema) {
   return { resolved, problems };
 }
 
+// Seam 12. intake.schema.json, QUESTIONNAIRE.md and intake.example.yaml describe one
+// contract three times, and nothing cross-read them: adding a field to the schema and the
+// example while forgetting the questionnaire silently dropped a question the operator never
+// got asked, and the happy-path validator still exited 0.
+//
+// The questionnaire is prose, so the binding is the backticked token. Any field or enum
+// value an operator must type has to appear as `name` somewhere in that document.
+export function checkDocsConsistency(schema, questionnaire, exampleText) {
+  const problems = [];
+  const props = Object.keys(schema.properties ?? {});
+  const named = (t) => questionnaire.includes(`\`${t}\``);
+
+  const exampleKeys = [];
+  for (const raw of exampleText.split(/\r?\n/)) {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*):/.exec(raw);
+    if (m) exampleKeys.push(m[1]);
+  }
+
+  for (const key of props) {
+    if (!named(key)) problems.push(`\`${key}\` is in the schema but never named in QUESTIONNAIRE.md`);
+    if (!exampleKeys.includes(key)) problems.push(`\`${key}\` is in the schema but absent from intake.example.yaml`);
+    for (const v of schema.properties[key].enum ?? []) {
+      if (!named(String(v))) {
+        problems.push(`\`${key}\`: enum value \`${v}\` is never named in QUESTIONNAIRE.md`);
+      }
+    }
+  }
+  for (const key of exampleKeys) {
+    if (!props.includes(key)) problems.push(`\`${key}\` is in intake.example.yaml but not in the schema`);
+  }
+  return problems;
+}
+
 const read = (p, label) => {
   try {
     return readFileSync(p, 'utf8');
@@ -126,6 +162,28 @@ if (schemaText == null) {
   process.exit(2);
 }
 const schema = JSON.parse(schemaText);
+
+if (checkDocs) {
+  const qPath = resolve(HERE, '..', 'QUESTIONNAIRE.md');
+  const ePath = resolve(HERE, '..', 'intake.example.yaml');
+  const qText = read(qPath, 'questionnaire');
+  const eText = read(ePath, 'example');
+  for (const [p, t] of [[qPath, qText], [ePath, eText]]) {
+    if (t == null) {
+      process.stderr.write(`validate-intake: missing ${p}\n`);
+      process.exit(2);
+    }
+  }
+  const docProblems = checkDocsConsistency(schema, qText, eText);
+  const nprops = Object.keys(schema.properties ?? {}).length;
+  if (docProblems.length) {
+    process.stdout.write(`validate-intake: FAIL — seam 12 drift, ${docProblems.length} problem(s)\n`);
+    for (const p of docProblems) process.stdout.write(`  ${p}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(`validate-intake: seam 12 consistent — ${nprops} field(s) in all three files\n`);
+  process.exit(0);
+}
 
 const intakeText = read(intakePath, 'intake');
 const parsed = intakeText == null ? { values: {}, problems: [] } : parseFlatYaml(intakeText);
