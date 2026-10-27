@@ -122,6 +122,22 @@ The acquired account every other acquired account can be recovered through, typi
 **Capability**:
 Something a run has been shown it can actually do, established by probing rather than declared. Absent capabilities remove work from a run rather than being noted as caveats.
 
+**Privileged operation**:
+An act that reaches outside a run's workspace — creating, changing or destroying something external, or spending. Only the foundry performs one; a harness can ask for one but never does it.
+
+**Engine tool**:
+A typed operation the foundry exposes to a harness, and the only route to a privileged operation. Asking is the harness's half; checking, performing, and recording are the foundry's.
+
+**Confinement**:
+The container boundary the foundry imposes on a harness, holding no credentials and no general egress. Distinct from a harness's own sandbox feature, which is weaker and differently named.
+_Avoid_: sandbox, jail
+
+**Tool grant**:
+The set of tools a role is permitted, declared on its manifest. It says what is offered; it is not what makes an operation safe.
+
+**Egress profile**:
+The network a role may reach, declared per role. A build role needs registries and documentation; an acquisition step needs the open web, and that breadth is recorded rather than ambient.
+
 **Provisioned resource**:
 Something external a run brought into existence. Each one is recorded as it is created, costed, and reversible by a recorded command.
 
