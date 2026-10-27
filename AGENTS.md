@@ -176,3 +176,28 @@ run fails if files appear in this tree, and it fails if the product directory is
 both are checked after the run, not assumed.
 
 This package keeps its own decisions in `docs/adr/`. They are not a run's decisions.
+
+## Agent skills
+
+These three files configure the engineering skills for this repository. They describe how a
+*developing* agent works here, not how a run behaves.
+
+### Issue tracker
+
+Issues live as GitHub issues in `Teagan42/aLLMchemy`, driven via the `gh` CLI. See
+`docs/agents/issue-tracker.md`.
+
+The architecture effort replacing this package is charted there as a Wayfinder map, issue
+#1. Its `## Notes` block carries the settled constraints; read it before proposing an
+engine design, and do not reopen a constraint it marks confirmed.
+
+### Triage labels
+
+The five canonical triage labels, used verbatim. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+`GLOSSARY.md` separates the foundry's vocabulary from that of the products it builds,
+because the two domains share words and mean different things by them.
